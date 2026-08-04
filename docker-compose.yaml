@@ -1,0 +1,27 @@
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Needed for the entrypoint's iptables rule that scopes host access to one port.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      HOST_ALLOWED_PORT: "8080"
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-3125720}
+      GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
+    volumes:
+      - ./projects:/workspace
+      - ./.docker-cache/npm:/home/agent/.npm
+      - ./.docker-cache/elan:/home/agent/.elan
+      - ./.docker-cache/gh:/home/agent/.config/gh
+      - ./.docker-cache/claude:/home/agent/.claude
+      - ./.docker-cache/claude.json:/home/agent/.claude.json
+      - ./pi:/home/agent/.pi
+      # Read-only. Not committed — see .gitignore (/docker/secrets/).
+      - ./docker/secrets/github-app.pem:/secrets/github-app.pem:ro
+    stdin_open: true
+    tty: true
