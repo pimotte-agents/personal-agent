@@ -1,0 +1,31 @@
+name: plan tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pi/agent/extensions/plan/**'
+      - '.github/workflows/plan-tests.yml'
+  pull_request:
+    paths:
+      - 'pi/agent/extensions/plan/**'
+      - '.github/workflows/plan-tests.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pi/agent/extensions/plan
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: pi/agent/extensions/plan/package-lock.json
+
+      - run: npm ci
+
+      - run: npm test
