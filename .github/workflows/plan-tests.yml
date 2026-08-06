@@ -3,9 +3,6 @@ name: plan tests
 on:
   push:
     branches: [main]
-    paths:
-      - 'pi/agent/extensions/plan/**'
-      - '.github/workflows/plan-tests.yml'
   pull_request:
     paths:
       - 'pi/agent/extensions/plan/**'

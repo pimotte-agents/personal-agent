@@ -3,9 +3,6 @@ name: ask-question tests
 on:
   push:
     branches: [main]
-    paths:
-      - 'pi/agent/extensions/ask-question/**'
-      - '.github/workflows/ask-question-tests.yml'
   pull_request:
     paths:
       - 'pi/agent/extensions/ask-question/**'
