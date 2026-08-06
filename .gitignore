@@ -5,3 +5,4 @@
 /pi/agent/sessions
 /pi/agent/auth.json
 /pi/agent/bin
+/pi/agent/pi-crash.log

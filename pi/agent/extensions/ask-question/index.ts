@@ -15,6 +15,7 @@ import {
 	matchesKey,
 	Text,
 	type TUI,
+	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
@@ -211,20 +212,28 @@ function createQuestionComponent(
 		const lines: string[] = [];
 		const renderWidth = Math.max(1, width);
 
+		function padAndTruncate(text: string, targetWidth: number): string {
+			const vw = visibleWidth(text);
+			if (vw < targetWidth) return text + " ".repeat(targetWidth - vw);
+			return truncateToWidth(text, targetWidth);
+		}
+
 		function addLine(text: string) {
-			lines.push(text.padEnd(renderWidth));
+			lines.push(padAndTruncate(text, renderWidth));
 		}
 
 		function addWrapped(text: string) {
-			lines.push(...wrapTextWithAnsi(text, renderWidth));
+			for (const line of wrapTextWithAnsi(text, renderWidth)) {
+				lines.push(padAndTruncate(line, renderWidth));
+			}
 		}
 
 		function addIndented(indent: number, text: string) {
 			const prefix = " ".repeat(indent);
 			const available = Math.max(1, renderWidth - indent);
 			for (const line of wrapTextWithAnsi(text, available)) {
-				lines.push((line.length < available ? line + " ".repeat(available - visibleWidth(line)) : line));
-				lines[lines.length - 1] = prefix + line;
+				const padded = padAndTruncate(line, available);
+				lines.push(prefix + padded);
 			}
 		}
 
@@ -272,13 +281,13 @@ function createQuestionComponent(
 			const otherIcon = isOtherOpt && editMode ? " ✎" : "";
 			const optionLine = `${prefix}${recMarker}${theme.fg(labelColor, label + otherIcon)}`;
 
-			lines.push(optionLine.padEnd(renderWidth));
+			lines.push(padAndTruncate(optionLine, renderWidth));
 
 			// Description
 			if (opt.description) {
 				const descPrefix = multiSelect ? "  " : "  ";
 				const descLine = `${descPrefix}${" ".repeat(isRecommended ? 2 : 0)}${theme.fg("muted", opt.description)}`;
-				lines.push(descLine.padEnd(renderWidth));
+				lines.push(padAndTruncate(descLine, renderWidth));
 			}
 
 			// Edit mode: show editor under "Other"
@@ -287,7 +296,7 @@ function createQuestionComponent(
 				addWrapped(theme.fg("muted", "Your answer:"));
 				const editorLines = editor.render(Math.max(1, renderWidth - 2));
 				for (const el of editorLines) {
-					lines.push(` ${el}`.padEnd(renderWidth));
+					lines.push(padAndTruncate(` ${el}`, renderWidth));
 				}
 			}
 		}

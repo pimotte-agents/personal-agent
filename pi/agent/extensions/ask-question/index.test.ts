@@ -7,31 +7,79 @@ const mockHandleInput = vi.fn();
 const mockSetText = vi.fn();
 const mockRender = vi.fn(() => ["|"]);
 
-vi.mock("@earendil-works/pi-tui", () => ({
-	Editor: vi.fn().mockImplementation(() => ({
-		handleInput: mockHandleInput,
-		setText: mockSetText,
-		render: mockRender,
-		onSubmit: undefined,
-	})),
-	Key: {
-		escape: "\u001b",
-		enter: "\r",
-		up: "\u001b[A",
-		down: "\u001b[B",
-	},
-	matchesKey: vi.fn((data: string, key: string | typeof import("@earendil-works/pi-tui").Key) => {
-		if (key === "\u001b" && data === "\u001b") return true;
-		if (key === "\r" && (data === "\r" || data === "\n")) return true;
-		if (key === "\u001b[A" && data === "\u001b[A") return true;
-		if (key === "\u001b[B" && data === "\u001b[B") return true;
-		if (key === "ctrl+enter" && data === "\u001b[E") return true;
-		return false;
-	}),
-	Text: vi.fn().mockImplementation((text, x, y) => ({ text, x, y })),
-	visibleWidth: vi.fn((s: string) => s.length),
-	wrapTextWithAnsi: vi.fn((text: string, _width: number) => [text]),
-}));
+vi.mock("@earendil-works/pi-tui", () => {
+	// Realistic ANSI-aware visibleWidth: strips common SGR/OSC escape sequences
+	const stripAnsi = (s: string) =>
+		s.replace(/\x1b\[[\d;]*[a-zA-Z]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
+	const mockVisibleWidth = vi.fn((s: string) => stripAnsi(s).length);
+
+	// Realistic wrapTextWithAnsi: wraps at word boundaries within width
+	const mockWrapTextWithAnsi = vi.fn((text: string, width: number) => {
+		const stripped = stripAnsi(text);
+		if (stripped.length <= width) return [text];
+		// Simple word-wrap simulation
+		const words = stripped.split(" ");
+		const lines: string[] = [];
+		let current = "";
+		for (const word of words) {
+			const test = current ? `${current} ${word}` : word;
+			if (test.length <= width) {
+				current = test;
+			} else {
+				if (current) lines.push(current);
+				current = word;
+			}
+		}
+		if (current) lines.push(current);
+		return lines;
+	});
+
+	// Realistic truncateToWidth: truncates based on visible width
+	const mockTruncateToWidth = vi.fn(
+		(s: string, width: number, ellipsis = "...") => {
+			const stripped = stripAnsi(s);
+			if (stripped.length <= width) return s;
+			// Truncate the visible portion, preserving ANSI at the start
+			const ansiPrefix = s.match(/^((?:\x1b\[[\d;]*[a-zA-Z])+)/);
+			const prefix = ansiPrefix ? ansiPrefix[0] : "";
+			const availableWidth = width - ellipsis.length;
+			const truncated = stripped.slice(0, availableWidth);
+			return prefix + truncated + ellipsis;
+		}
+	);
+
+	return {
+		Editor: vi.fn().mockImplementation(() => ({
+			handleInput: mockHandleInput,
+			setText: mockSetText,
+			render: mockRender,
+			onSubmit: undefined,
+		})),
+		Key: {
+			escape: "\u001b",
+			enter: "\r",
+			up: "\u001b[A",
+			down: "\u001b[B",
+		},
+		matchesKey: vi.fn(
+			(
+				data: string,
+				key: string | typeof import("@earendil-works/pi-tui").Key,
+			) => {
+				if (key === "\u001b" && data === "\u001b") return true;
+				if (key === "\r" && (data === "\r" || data === "\n")) return true;
+				if (key === "\u001b[A" && data === "\u001b[A") return true;
+				if (key === "\u001b[B" && data === "\u001b[B") return true;
+				if (key === "ctrl+enter" && data === "\u001b[E") return true;
+				return false;
+			},
+		),
+		Text: vi.fn().mockImplementation((text, x, y) => ({ text, x, y })),
+		visibleWidth: mockVisibleWidth,
+		wrapTextWithAnsi: mockWrapTextWithAnsi,
+		truncateToWidth: mockTruncateToWidth,
+	};
+});
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({}));
 vi.mock("typebox", () => ({
@@ -535,5 +583,166 @@ describe("rendering", () => {
 			mockTheme,
 		);
 		expect(component.text).toContain("Cancelled");
+	});
+});
+
+// ── Test: render width constraints (regression for terminal overflow crash) ──
+
+describe("render width constraints", () => {
+	/** Strip ANSI escape codes so we can measure visible width */
+	function visibleWidth(s: string): number {
+		return s.replace(/\x1b\[[\d;]*[a-zA-Z]/g, "").replace(/\x1b\][^\x07]*\x07/g, "").length;
+	}
+
+	/**
+	 * Extract the question component from the tool by intercepting ctx.ui.custom.
+	 * Returns the component ready for testing.
+	 */
+	async function getComponent(params: any) {
+		let capturedFactory: (tui: any, theme: any, kb: any, done: any) => any;
+		let pendingDone: (value: any) => void;
+
+		const mockCtx: any = {
+			mode: "tui",
+			ui: {
+				custom: vi.fn().mockImplementation((factory: any) => {
+					capturedFactory = factory;
+					return new Promise((resolve) => {
+						pendingDone = resolve;
+					});
+				}),
+			},
+		};
+
+		// Boot the extension and grab the tool
+		const mockPi = { on: vi.fn(), registerTool: vi.fn(), setActiveTools: vi.fn() };
+		const mod = await import("./index");
+		mod.default(mockPi as any);
+		const toolDef = mockPi.registerTool.mock.calls[0][0];
+
+		// Trigger execute to capture the component factory
+		toolDef.execute(
+			"tool-1",
+			params,
+			new AbortController().signal,
+			vi.fn(),
+			mockCtx,
+		);
+
+		// Build a minimal theme with ANSI SGR codes (realistic)
+		const ansiTheme = {
+			fg: (color: string, text: string) => `\x1b[38;5;241m${text}\x1b[0m`,
+			bold: (text: string) => `\x1b[1m${text}\x1b[0m`,
+		};
+		return capturedFactory(null, ansiTheme, null, pendingDone);
+	}
+
+	/** Assert all rendered lines respect the given width */
+	function assertWidth(lines: string[], width: number) {
+		for (let i = 0; i < lines.length; i++) {
+			expect(visibleWidth(lines[i]), `line ${i} exceeds width ${width}`).toBeLessThanOrEqual(width);
+		}
+	}
+
+	it("no line exceeds width with short content at common widths", async () => {
+		const comp = await getComponent({
+			question: "Pick a color?",
+			options: [{ title: "Red", recommended: true }, { title: "Blue" }],
+		});
+		for (const width of [80, 60, 40, 30, 20]) {
+			comp.invalidate();
+			assertWidth(comp.render(width), width);
+		}
+	});
+
+	it("no line exceeds width with very long option titles", async () => {
+		const comp = await getComponent({
+			question: "Choose?",
+			options: [
+				{
+					title: "ThisIsAVeryLongOptionTitleThatWouldEasilyExceedTheTerminalWidthIfNotProperlyTruncatedAndTheOldPadEndImplementationCountedAnsiEscapeCodesAsVisibleCharactersMakingTheLineEvenLonger",
+					recommended: true,
+				},
+				{
+					title: "AnotherExtremelyLongOptionThatTestsWhetherTheTruncationLogicHandlesMultipleLongOptionsCorrectlyWithoutCausingAnyTerminalOverflowCrashOrWrappingIssues",
+				},
+			],
+		});
+		for (const width of [80, 50, 30, 20]) {
+			comp.invalidate();
+			assertWidth(comp.render(width), width);
+		}
+	});
+
+	it("no line exceeds width with long descriptions", async () => {
+		const comp = await getComponent({
+			question: "Q?",
+			options: [
+				{
+					title: "A",
+					description: "This description is deliberately very long and should wrap and truncate properly when the terminal width is narrow enough to cause issues with the rendering logic that previously used padEnd which counted ANSI escape codes as visible characters",
+				},
+			],
+		});
+		for (const width of [80, 50, 30]) {
+			comp.invalidate();
+			assertWidth(comp.render(width), width);
+		}
+	});
+
+	it("no line exceeds width with long question text", async () => {
+		const comp = await getComponent({
+			question: "This is a very long question that contains many words and should wrap across multiple lines when rendered in a narrow terminal window to test whether the width constraint is properly enforced for all lines of the wrapped question text",
+			options: [{ title: "Yes" }],
+		});
+		for (const width of [80, 50, 30]) {
+			comp.invalidate();
+			assertWidth(comp.render(width), width);
+		}
+	});
+
+	it("no line exceeds width in multi-select mode", async () => {
+		const comp = await getComponent({
+			question: "Select all that apply from this extremely long list of options that tests the multi-select rendering mode with long text",
+			options: [
+				{ title: "OptionOneWithAVeryLongTitle" },
+				{ title: "OptionTwoWithAVeryLongTitle" },
+				{ title: "OptionThreeWithAVeryLongTitle" },
+			],
+			multiSelect: true,
+		});
+		for (const width of [80, 50, 30]) {
+			comp.invalidate();
+			assertWidth(comp.render(width), width);
+		}
+	});
+
+	it("no line exceeds width when ANSI styling adds invisible codes", async () => {
+		const comp = await getComponent({
+			question: "\x1b[1m\x1b[38;5;226mThis question has ANSI codes embedded making the string longer than its visible width\x1b[0m",
+			options: [
+				{
+					title: "\x1b[38;5;226m\x1b[1mA very long option title with ANSI color codes that should be stripped when calculating visible width\x1b[0m",
+					recommended: true,
+				},
+			],
+		});
+		for (const width of [80, 50, 30]) {
+			comp.invalidate();
+			assertWidth(comp.render(width), width);
+		}
+	});
+
+	it("handles extreme narrow widths without crashing", async () => {
+		const comp = await getComponent({
+			question: "Test",
+			options: [{ title: "A", description: "B" }],
+		});
+		for (const width of [40, 20, 12]) {
+			comp.invalidate();
+			const lines = comp.render(width);
+			expect(lines.length).toBeGreaterThan(0);
+			assertWidth(lines, width);
+		}
 	});
 });
