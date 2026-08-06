@@ -328,7 +328,8 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		inTuiMode = ctx.mode === "tui";
 		if (inTuiMode) {
-			pi.setActiveTools(["ask_question"]);
+			const active = pi.getActiveTools();
+			pi.setActiveTools([...new Set([...active, "ask_question"])]);
 		}
 	});
 

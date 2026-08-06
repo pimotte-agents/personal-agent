@@ -1,0 +1,31 @@
+name: ask-question tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pi/agent/extensions/ask-question/**'
+      - '.github/workflows/ask-question-tests.yml'
+  pull_request:
+    paths:
+      - 'pi/agent/extensions/ask-question/**'
+      - '.github/workflows/ask-question-tests.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pi/agent/extensions/ask-question
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: pi/agent/extensions/ask-question/package-lock.json
+
+      - run: npm ci
+
+      - run: npm test

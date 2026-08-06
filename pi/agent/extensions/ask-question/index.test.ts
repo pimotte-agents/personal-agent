@@ -186,6 +186,7 @@ describe("question component", () => {
 			on: vi.fn(),
 			registerTool: vi.fn(),
 			setActiveTools: vi.fn(),
+			getActiveTools: vi.fn().mockReturnValue(["read", "bash", "write", "edit"]),
 		};
 
 		extensionFactory(mockPi as any);
@@ -195,7 +196,10 @@ describe("question component", () => {
 
 		// Simulate TUI mode
 		await sessionStartHandler({}, { mode: "tui" });
-		expect(mockPi.setActiveTools).toHaveBeenCalledWith(["ask_question"]);
+		expect(mockPi.getActiveTools).toHaveBeenCalled();
+		expect(mockPi.setActiveTools).toHaveBeenCalledWith(
+			expect.arrayContaining(["ask_question", "read", "bash", "write", "edit"]),
+		);
 
 		// Simulate non-TUI mode
 		mockPi.setActiveTools.mockReset();
