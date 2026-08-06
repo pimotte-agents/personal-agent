@@ -21,6 +21,7 @@ services:
       - ./.docker-cache/claude:/home/agent/.claude
       - ./.docker-cache/claude.json:/home/agent/.claude.json
       - ./pi:/home/agent/.pi
+      - ./bin:/home/agent/bin
       # Read-only. Not committed — see .gitignore (/docker/secrets/).
       - ./docker/secrets/github-app.pem:/secrets/github-app.pem:ro
     stdin_open: true

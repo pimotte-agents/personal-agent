@@ -1,3 +1,7 @@
 /projects/
 /.docker-cache/
 /docker/secrets/
+**/node_modules
+/pi/agent/sessions
+/pi/agent/auth.json
+/pi/agent/bin

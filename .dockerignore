@@ -1,0 +1,8 @@
+# Bind-mounted at runtime (see docker-compose.yaml), never needed in the build context.
+# The Dockerfile only COPYs docker/*.sh — everything else here is dead weight or, for
+# docker/secrets/, a private key that shouldn't be sent to the daemon at all.
+/projects/
+/.docker-cache/
+/docker/secrets/
+/pi/
+/bin/

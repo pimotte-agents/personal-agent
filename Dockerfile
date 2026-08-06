@@ -20,7 +20,7 @@ RUN useradd --create-home --shell /bin/bash agent
 
 ENV HOME=/home/agent \
     ELAN_HOME=/home/agent/.elan
-ENV PATH="${ELAN_HOME}/bin:${PATH}"
+ENV PATH="${HOME}/bin:${ELAN_HOME}/bin:${PATH}"
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY docker/agent-start.sh /usr/local/bin/agent-start.sh
