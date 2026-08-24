@@ -5,10 +5,10 @@
  *
  *   # Plan: <goal>
  *
- *   - [ ] TODO: Task description
- *   - [x] DONE: Task description
- *   - [ ] BLOCKED: Task description — reason
- *   - [ ] UNKNOWN: Task description — reason
+ *   - TODO: Task description
+ *   - DONE: Task description
+ *   - BLOCKED: Task description — reason
+ *   - UNKNOWN: Task description — reason
  */
 
 export type { PlanFileData, PlanTask, TaskStatus } from "./types.js";
@@ -17,7 +17,7 @@ export { PLAN_FILE_NAME, PLAN_DIR } from "./types.js";
 // ── Parsing ────────────────────────────────────────────────────────────────
 
 const GOAL_RE = /^#\s*Plan:\s*(.+)$/im;
-const TASK_RE = /^(\s*)- \[[ x]\] (TODO|DONE|BLOCKED|UNKNOWN):\s*(.+)$/gm;
+const TASK_RE = /^(\s*)- (TODO|DONE|BLOCKED|UNKNOWN):\s*(.+)$/gm;
 const REASON_SEP = " \u2014 "; // " — "
 
 /** Parse a plan markdown string into structured data. */
@@ -65,8 +65,7 @@ export function serializePlan(data: PlanFileData): string {
 	lines.push("");
 
 	for (const task of data.tasks) {
-		const checked = task.status === "DONE" ? "x" : " ";
-		let line = `- [${checked}] ${task.status}: ${task.text}`;
+		let line = `- ${task.status}: ${task.text}`;
 
 		if (task.reason) {
 			line += `${REASON_SEP}${task.reason}`;
@@ -127,6 +126,38 @@ export function countByStatus(data: PlanFileData): Record<TaskStatus, number> {
 /** Check if all tasks are completed (DONE, BLOCKED, or UNKNOWN). */
 export function isPlanComplete(data: PlanFileData): boolean {
 	return data.tasks.length > 0 && data.tasks.every((t) => t.status !== "TODO");
+}
+
+// ── Syntax validation ─────────────────────────────────────────────────────
+
+/**
+ * Validate the markdown content of a plan for formatting issues.
+ * Returns an array of error messages, or an empty array if valid.
+ */
+export function validatePlanSyntax(content: string): string[] {
+	const errors: string[] = [];
+
+	// Check for plan header
+	if (!GOAL_RE.test(content)) {
+		errors.push("Missing plan header. Expected: '# Plan: <goal>'");
+	}
+
+	// Parse and check tasks
+	const parsed = parsePlan(content);
+	if (parsed.tasks.length === 0 && !errors.length) {
+		errors.push("No tasks found in the plan. Expected tasks in format: '- TODO: task description'");
+	}
+
+	// Check for empty task descriptions
+	for (const task of parsed.tasks) {
+		if (!task.text.trim()) {
+			errors.push(
+				`Task ${task.index}: Empty task description. Every task must have a description after the status keyword.`,
+			);
+		}
+	}
+
+	return errors;
 }
 
 /** Build a summary string like "3 DONE, 1 BLOCKED, 1 UNKNOWN". */

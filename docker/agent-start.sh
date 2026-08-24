@@ -8,8 +8,6 @@ if [ ! -x "$ELAN_HOME/bin/elan" ]; then
     | sh -s -- -y --no-modify-path --default-toolchain none
 fi
 
-pi install npm:pi-mcp-adapter
-
 # Best-effort: no network / no key mounted shouldn't block getting a shell.
 if [ -n "${GITHUB_APP_ID:-}" ] && [ -n "${GITHUB_APP_PRIVATE_KEY_PATH:-}" ]; then
   gh-app-login || echo "agent-start: gh-app-login failed, continuing without gh auth" >&2

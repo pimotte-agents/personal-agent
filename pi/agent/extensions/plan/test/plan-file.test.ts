@@ -7,6 +7,7 @@ import {
 	countByStatus,
 	isPlanComplete,
 	buildSummary,
+	validatePlanSyntax,
 } from "../plan-file.js";
 import type { PlanFileData } from "../types.js";
 
@@ -16,9 +17,9 @@ describe("parsePlan", () => {
 	it("parses goal and tasks", () => {
 		const input = `# Plan: Build authentication system
 
-- [ ] TODO: Set up user model
-- [ ] TODO: Create login endpoint
-- [ ] TODO: Add JWT middleware`;
+- TODO: Set up user model
+- TODO: Create login endpoint
+- TODO: Add JWT middleware`;
 
 		const result = parsePlan(input);
 		expect(result.goal).toBe("Build authentication system");
@@ -36,7 +37,7 @@ describe("parsePlan", () => {
 	it("parses DONE tasks", () => {
 		const input = `# Plan: Test plan
 
-- [x] DONE: Completed task`;
+- DONE: Completed task`;
 
 		const result = parsePlan(input);
 		expect(result.tasks[0].status).toBe("DONE");
@@ -45,7 +46,7 @@ describe("parsePlan", () => {
 	it("parses BLOCKED tasks with reason", () => {
 		const input = `# Plan: Test
 
-- [ ] BLOCKED: Some task — could not find API docs`;
+- BLOCKED: Some task — could not find API docs`;
 
 		const result = parsePlan(input);
 		expect(result.tasks[0].status).toBe("BLOCKED");
@@ -56,7 +57,7 @@ describe("parsePlan", () => {
 	it("parses UNKNOWN tasks with reason", () => {
 		const input = `# Plan: Test
 
-- [ ] UNKNOWN: Unclear task — outcome was ambiguous`;
+- UNKNOWN: Unclear task — outcome was ambiguous`;
 
 		const result = parsePlan(input);
 		expect(result.tasks[0].status).toBe("UNKNOWN");
@@ -70,7 +71,7 @@ describe("parsePlan", () => {
 	});
 
 	it("handles plan without goal", () => {
-		const result = parsePlan("- [ ] TODO: A task");
+		const result = parsePlan("- TODO: A task");
 		expect(result.goal).toBe("");
 		expect(result.tasks).toHaveLength(1);
 	});
@@ -78,10 +79,10 @@ describe("parsePlan", () => {
 	it("handles mixed statuses", () => {
 		const input = `# Plan: Mixed
 
-- [ ] TODO: First
-- [x] DONE: Second
-- [ ] BLOCKED: Third — reason here
-- [ ] UNKNOWN: Fourth — unclear outcome`;
+- TODO: First
+- DONE: Second
+- BLOCKED: Third — reason here
+- UNKNOWN: Fourth — unclear outcome`;
 
 		const result = parsePlan(input);
 		expect(result.tasks[0].status).toBe("TODO");
@@ -95,7 +96,7 @@ describe("parsePlan", () => {
 	it("preserves task text that contains dashes", () => {
 		const input = `# Plan: Test
 
-- [ ] TODO: Run integration-tests — smoke test`;
+- TODO: Run integration-tests — smoke test`;
 
 		const result = parsePlan(input);
 		// The " — " separator is used to split reason, so text before it is the task
@@ -109,9 +110,9 @@ describe("parsePlan", () => {
 Some random text here.
 ## Section
 
-- [ ] TODO: A real task
+- TODO: A real task
 Not a task either.
-- [x] DONE: Another task`;
+- DONE: Another task`;
 
 		const result = parsePlan(input);
 		expect(result.tasks).toHaveLength(2);
@@ -120,8 +121,8 @@ Not a task either.
 	it("handles task text with special characters", () => {
 		const input = `# Plan: Test
 
-- [ ] TODO: Add rate-limiting to /api/upload endpoint
-- [ ] TODO: Support "quoted" values`;
+- TODO: Add rate-limiting to /api/upload endpoint
+- TODO: Support "quoted" values`;
 
 		const result = parsePlan(input);
 		expect(result.tasks[0].text).toBe("Add rate-limiting to /api/upload endpoint");
@@ -143,8 +144,8 @@ describe("serializePlan", () => {
 
 		const output = serializePlan(data);
 		expect(output).toContain("# Plan: Test goal");
-		expect(output).toContain("- [ ] TODO: First task");
-		expect(output).toContain("- [x] DONE: Second task");
+		expect(output).toContain("- TODO: First task");
+		expect(output).toContain("- DONE: Second task");
 	});
 
 	it("serializes BLOCKED task with reason", () => {
@@ -156,7 +157,7 @@ describe("serializePlan", () => {
 		};
 
 		const output = serializePlan(data);
-		expect(output).toContain("- [ ] BLOCKED: Blocked task — no API docs");
+		expect(output).toContain("- BLOCKED: Blocked task — no API docs");
 	});
 
 	it("serializes UNKNOWN task with reason", () => {
@@ -168,7 +169,7 @@ describe("serializePlan", () => {
 		};
 
 		const output = serializePlan(data);
-		expect(output).toContain("- [ ] UNKNOWN: Unclear — ambiguous");
+		expect(output).toContain("- UNKNOWN: Unclear — ambiguous");
 	});
 
 	it("serializes empty plan", () => {
@@ -180,10 +181,10 @@ describe("serializePlan", () => {
 	it("round-trips through parse + serialize", () => {
 		const original = `# Plan: Round trip
 
-- [ ] TODO: Task one
-- [x] DONE: Task two
-- [ ] BLOCKED: Task three — blocked reason
-- [ ] UNKNOWN: Task four — unknown reason`;
+- TODO: Task one
+- DONE: Task two
+- BLOCKED: Task three — blocked reason
+- UNKNOWN: Task four — unknown reason`;
 
 		const parsed = parsePlan(original);
 		const serialized = serializePlan(parsed);
@@ -417,5 +418,58 @@ describe("buildSummary", () => {
 
 		const summary = buildSummary(data);
 		expect(summary).toBe("1 DONE");
+	});
+});
+
+// ── validatePlanSyntax ─────────────────────────────────────────────────────
+
+describe("validatePlanSyntax", () => {
+	it("returns no errors for a valid plan", () => {
+		const input = `# Plan: Valid plan
+
+- TODO: First task
+- TODO: Second task
+- DONE: Third task`;
+
+		const errors = validatePlanSyntax(input);
+		expect(errors).toHaveLength(0);
+	});
+
+	it("detects missing plan header", () => {
+		const input = `- TODO: A task`;
+
+		const errors = validatePlanSyntax(input);
+		expect(errors.some((e) => e.includes("Missing plan header"))).toBe(true);
+	});
+
+	it("detects no tasks in plan", () => {
+		const input = `# Plan: No tasks here
+
+Just some text without tasks.`;
+
+		const errors = validatePlanSyntax(input);
+		expect(errors.some((e) => e.includes("No tasks found"))).toBe(true);
+	});
+
+	it("accepts valid plan with mixed statuses and reasons", () => {
+		const input = `# Plan: Complex plan
+
+- TODO: First task
+- DONE: Second task
+- BLOCKED: Third task — API down
+- UNKNOWN: Fourth task — unclear result`;
+
+		const errors = validatePlanSyntax(input);
+		expect(errors).toHaveLength(0);
+	});
+
+	it("accepts plan with only DONE tasks", () => {
+		const input = `# Plan: All done
+
+- DONE: Task one
+- DONE: Task two`;
+
+		const errors = validatePlanSyntax(input);
+		expect(errors).toHaveLength(0);
 	});
 });
