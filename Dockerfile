@@ -18,6 +18,9 @@ RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 # rule below), then drops to this user before running anything from /workspace.
 RUN useradd --create-home --shell /bin/bash agent
 
+RUN git config --system user.name "pimotte-agent" \
+ && git config --system user.email "p.j.otte@tue.nl"
+
 ENV HOME=/home/agent \
     ELAN_HOME=/home/agent/.elan
 ENV PATH="${HOME}/bin:${ELAN_HOME}/bin:${PATH}"
