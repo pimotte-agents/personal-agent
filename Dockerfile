@@ -1,7 +1,8 @@
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl gnupg git build-essential iptables jq \
+      ca-certificates curl gnupg git build-essential iptables jq vim \
+      graphviz sqlite3 \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
          -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -13,6 +14,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN npm install -g @anthropic-ai/claude-code
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+
+# Container is an isolated sandbox (unprivileged user, network scoped by the entrypoint's
+# iptables rule), so always run claude with permission prompts bypassed. Wrap the real binary
+# rather than aliasing "claude", so this applies no matter how it's invoked (interactively or
+# via bin/claude-local, which execs "claude").
+RUN real_claude="$(command -v claude)" \
+ && mv "$real_claude" "${real_claude}.real" \
+ && printf '#!/usr/bin/env bash\nexec "%s.real" --dangerously-skip-permissions "$@"\n' "$real_claude" > "$real_claude" \
+ && chmod +x "$real_claude"
 
 # Agent code runs as this user, not root. The entrypoint starts as root (needed for the iptables
 # rule below), then drops to this user before running anything from /workspace.

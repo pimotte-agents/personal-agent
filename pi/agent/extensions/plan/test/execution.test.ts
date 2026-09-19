@@ -311,6 +311,76 @@ describe("extractBlockedReason", () => {
 		expect(reason).toBe("Could not find docs.\nPlease provide a link.");
 	});
 
+	it("strips the interceptor boilerplate after the question", () => {
+		// The tool_call handler in index.ts appends this exact tail after the
+		// question; only the question itself may become the blocked reason.
+		const text =
+			// Real interceptor format: the handler appends ". The plan extension …"
+		// (its own period) after the question, then the IMPORTANT block.
+		"[PLAN BLOCKED] Task blocked. Reason: Task 6's design-note update references the new example — how should I proceed?. The plan extension will mark this task as BLOCKED and proceed to the next task.\n\nIMPORTANT: Do not keep calling ask_question — you are in an infinite loop. Instead:\n- If the task is complete, call task_complete with status DONE\n- If you truly need user input, this will be your last ask_question call before the task is marked BLOCKED";
+
+		const branch: SessionBranchEntry[] = [
+			{
+				type: "message",
+				message: {
+					role: "toolResult",
+					toolName: "ask_question",
+					isError: true,
+					content: [{ type: "text", text }],
+				},
+			},
+		];
+
+		const reason = extractBlockedReason(branch);
+		expect(reason).toBe(
+			"Task 6's design-note update references the new example — how should I proceed?",
+		);
+	});
+
+	it("keeps a multiline question but strips the boilerplate", () => {
+		// A question ending in its own period yields ".. The plan extension …"
+		// in the raw text; the question's own period must be kept.
+		const text =
+			"[PLAN BLOCKED] Task blocked. Reason: Could not find the book page.\nPlease provide the source text.. The plan extension will mark this task as BLOCKED and proceed to the next task.\n\nIMPORTANT: Do not keep calling ask_question — you are in an infinite loop.";
+
+		const branch: SessionBranchEntry[] = [
+			{
+				type: "message",
+				message: {
+					role: "toolResult",
+					toolName: "ask_question",
+					isError: true,
+					content: [{ type: "text", text }],
+				},
+			},
+		];
+
+		const reason = extractBlockedReason(branch);
+		expect(reason).toBe("Could not find the book page.\nPlease provide the source text.");
+	});
+
+	it("falls back to the first blank line when the suffix is absent", () => {
+		// If the interceptor format changes, trailing guidance after a blank
+		// line must still be dropped (a single-newline question is kept).
+		const text =
+			"[PLAN BLOCKED] Task blocked. Reason: Need the reviewer's decision.\nFollow up tomorrow.\n\nSOME OTHER APPENDED NOTE";
+
+		const branch: SessionBranchEntry[] = [
+			{
+				type: "message",
+				message: {
+					role: "toolResult",
+					toolName: "ask_question",
+					isError: true,
+					content: [{ type: "text", text }],
+				},
+			},
+		];
+
+		const reason = extractBlockedReason(branch);
+		expect(reason).toBe("Need the reviewer's decision.\nFollow up tomorrow.");
+	});
+
 	it("returns undefined for empty branch", () => {
 		const reason = extractBlockedReason([]);
 		expect(reason).toBeUndefined();

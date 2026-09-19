@@ -13,4 +13,11 @@ if [ -n "${GITHUB_APP_ID:-}" ] && [ -n "${GITHUB_APP_PRIVATE_KEY_PATH:-}" ]; the
   gh-app-login || echo "agent-start: gh-app-login failed, continuing without gh auth" >&2
 fi
 
+# Long-lived `claude setup-token` token, so `claude` authenticates against the subscription
+# without an interactive OAuth login. Unset (rather than run `claude-local`, see ../bin) to talk
+# to the local llama.cpp server instead.
+if [ -n "${CLAUDE_OAUTH_TOKEN_PATH:-}" ] && [ -f "${CLAUDE_OAUTH_TOKEN_PATH}" ]; then
+  export CLAUDE_CODE_OAUTH_TOKEN="$(cat "$CLAUDE_OAUTH_TOKEN_PATH")"
+fi
+
 exec "$@"

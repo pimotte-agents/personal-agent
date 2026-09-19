@@ -92,6 +92,13 @@ export interface SessionBranchEntry {
 	};
 }
 
+/**
+ * Suffix the ask_question interceptor appends after the question in the
+ * tool-result text (see the `tool_call` handler in index.ts).
+ */
+const BLOCK_SUFFIX =
+	". The plan extension will mark this task as BLOCKED and proceed to the next task.";
+
 /** Extract the blocked reason from the session branch. */
 export function extractBlockedReason(
 	branch: SessionBranchEntry[],
@@ -107,9 +114,24 @@ export function extractBlockedReason(
 				const content = msg.content?.[0];
 				if (content?.type === "text" && content.text) {
 					const match = content.text.match(
-						/\[PLAN BLOCKED\].*?Reason:\s*(.+)/s,
+						/\[PLAN BLOCKED\].*?Reason:\s*([\s\S]+)/,
 					);
-					if (match) return match[1].trim();
+					if (match) {
+						let reason = match[1];
+						// The tool result appends interceptor guidance after the
+						// question. Keep only the question itself (which may be
+						// multiline): cut at the known suffix, or — if the
+						// interceptor format changed — at the first blank line.
+						const suffixAt = reason.indexOf(BLOCK_SUFFIX);
+						if (suffixAt !== -1) {
+							reason = reason.slice(0, suffixAt);
+						} else {
+							const blankAt = reason.search(/\n[ \t]*\n/);
+							if (blankAt !== -1) reason = reason.slice(0, blankAt);
+						}
+						reason = reason.trim();
+						if (reason) return reason;
+					}
 				}
 			}
 		}

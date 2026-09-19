@@ -13,6 +13,7 @@ services:
       HOST_ALLOWED_PORT: "8080"
       GITHUB_APP_ID: ${GITHUB_APP_ID:-3125720}
       GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
+      CLAUDE_OAUTH_TOKEN_PATH: /secrets/claude-oauth-token
     volumes:
       - ./projects:/workspace
       - ./.docker-cache/npm:/home/agent/.npm
@@ -24,5 +25,6 @@ services:
       - ./bin:/home/agent/bin
       # Read-only. Not committed — see .gitignore (/docker/secrets/).
       - ./docker/secrets/github-app.pem:/secrets/github-app.pem:ro
+      - ./docker/secrets/claude-oauth-token:/secrets/claude-oauth-token:ro
     stdin_open: true
     tty: true

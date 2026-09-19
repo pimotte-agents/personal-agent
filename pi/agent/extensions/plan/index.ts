@@ -547,7 +547,7 @@ Format the plan as follows:
 - TODO: Second task description
 - TODO: Third task description
 
-Beyond TODO, valid task labels are DONE, UNKNOWN and BLOCKED.
+Beyond TODO, valid task labels are DONE, UNKNOWN and BLOCKED. Only BLOCKED and UNKNOWN tasks may carry a reason, written after the LAST — separator (“ — ”); TODO/DONE descriptions may contain emdashes and colons freely.
 
 Do NOT start executing any tasks — just update the plan.`;
 			} else {
@@ -566,6 +566,8 @@ Format the plan as follows:
 - TODO: First task description
 - TODO: Second task description
 - TODO: Third task description
+
+Only BLOCKED and UNKNOWN tasks may carry a reason, written after the LAST — separator (“ — ”); task descriptions may contain emdashes and colons freely.
 
 Do NOT start executing any tasks — just create the plan.`;
 			}
@@ -621,7 +623,9 @@ Rules:
 - Header must be: # Plan: <goal>
 - Each task must have: - STATUS: description
 - Valid statuses: TODO, DONE, BLOCKED, UNKNOWN
-- Every task must have a non-empty description`;
+- Every task must have a non-empty description
+- TODO/DONE descriptions may contain colons and emdashes freely
+- Only BLOCKED and UNKNOWN tasks may carry a reason: the text after the LAST — separator (“ — ”) on the line`;
 
 								await pi.sendUserMessage(fixPrompt, { deliverAs: "followUp" });
 								return;
@@ -677,7 +681,9 @@ Rules:
 - Header must be: # Plan: <goal>
 - Each task must have: - STATUS: description
 - Valid statuses: TODO, DONE, BLOCKED, UNKNOWN
-- Every task must have a non-empty description`;
+- Every task must have a non-empty description
+- TODO/DONE descriptions may contain colons and emdashes freely
+- Only BLOCKED and UNKNOWN tasks may carry a reason: the text after the LAST — separator (“ — ”) on the line`;
 
 					await pi.sendUserMessage(fixPrompt, { deliverAs: "followUp" });
 					return;

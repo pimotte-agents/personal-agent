@@ -20,3 +20,11 @@ if [ ! -f docker/secrets/github-app.pem ]; then
   echo "  Copy the GitHub App private key there before" >&2
   echo "  starting the container, or gh-app-login will fail at boot (non-fatally)." >&2
 fi
+
+if [ ! -f docker/secrets/claude-oauth-token ]; then
+  echo "setup.sh: docker/secrets/claude-oauth-token is missing." >&2
+  echo "  Run 'claude setup-token' (needs an interactive login) and paste the" >&2
+  echo "  resulting token into that file before starting the container, or" >&2
+  echo "  'claude' will fall back to an interactive OAuth login instead of the" >&2
+  echo "  subscription token." >&2
+fi

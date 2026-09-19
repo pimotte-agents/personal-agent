@@ -9,6 +9,10 @@
  *   - DONE: Task description
  *   - BLOCKED: Task description — reason
  *   - UNKNOWN: Task description — reason
+ *
+ * Only BLOCKED and UNKNOWN tasks carry a reason: the text after the LAST
+ * " — " (U+2014) separator on the line. TODO/DONE descriptions may contain
+ * " — " freely — the whole rest of the line is the description.
  */
 
 export type { PlanFileData, PlanTask, TaskStatus } from "./types.js";
@@ -30,17 +34,27 @@ export function parsePlan(content: string): PlanFileData {
 
 	while ((match = TASK_RE.exec(content)) !== null) {
 		const rawText = match[3].trim();
+		const status = match[2] as TaskStatus;
 		let text = rawText;
 		let reason: string | undefined;
 
-		// Check if there's a reason separator in the text
-		const sepIndex = rawText.indexOf(REASON_SEP);
-		if (sepIndex !== -1) {
-			text = rawText.slice(0, sepIndex).trim();
-			reason = rawText.slice(sepIndex + REASON_SEP.length).trim();
+		// Only BLOCKED and UNKNOWN tasks carry a reason, written after a
+		// " — " separator. TODO/DONE descriptions may contain " — " (and
+		// colons) freely — the whole rest of the line is the description.
+		//
+		// The extension always APPENDS the reason at the end of the line,
+		// so split at the LAST separator to keep descriptions containing
+		// emdashes intact. (If the reason itself contains " — ", the part
+		// before its last separator is read as description — the format is
+		// inherently ambiguous there.)
+		if (status === "BLOCKED" || status === "UNKNOWN") {
+			const sepIndex = rawText.lastIndexOf(REASON_SEP);
+			if (sepIndex !== -1) {
+				text = rawText.slice(0, sepIndex).trim();
+				reason = rawText.slice(sepIndex + REASON_SEP.length).trim();
+			}
 		}
 
-		const status = match[2] as TaskStatus;
 		tasks.push({
 			index: tasks.length + 1,
 			text,
@@ -95,11 +109,13 @@ export function updateTaskStatus(
 	if (!task) return null;
 
 	task.status = status;
-	if (status === "BLOCKED" || status === "UNKNOWN") {
-		task.reason = reason ?? task.reason;
-	} else {
-		task.reason = undefined;
+	if (reason !== undefined) {
+		task.reason = reason;
 	}
+	// An existing reason is kept when moving to TODO/DONE (or when no new
+	// reason is given): it may hold description content that followed a
+	// " — " separator on a BLOCKED/UNKNOWN line, and user content must
+	// never be dropped silently.
 
 	return data;
 }

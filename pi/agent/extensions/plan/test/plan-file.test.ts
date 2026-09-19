@@ -93,15 +93,79 @@ describe("parsePlan", () => {
 		expect(result.tasks[3].reason).toBe("unclear outcome");
 	});
 
-	it("preserves task text that contains dashes", () => {
+	it("keeps emdashes in TODO descriptions (no reason split)", () => {
 		const input = `# Plan: Test
 
 - TODO: Run integration-tests — smoke test`;
 
 		const result = parsePlan(input);
-		// The " — " separator is used to split reason, so text before it is the task
-		expect(result.tasks[0].text).toBe("Run integration-tests");
-		expect(result.tasks[0].reason).toBe("smoke test");
+		// TODO tasks never carry a reason: the whole rest of the line is the
+		// description, emdashes included.
+		expect(result.tasks[0].text).toBe("Run integration-tests — smoke test");
+		expect(result.tasks[0].reason).toBeUndefined();
+	});
+
+	it("keeps emdashes in DONE descriptions (no reason split)", () => {
+		const input = `# Plan: Test
+
+- DONE: Reply to **each** of the 27 comments (established "Done — ..." style); for 3851331565 answer the question (not in the current book version → removed)`;
+
+		const result = parsePlan(input);
+		expect(result.tasks[0].text).toBe(
+			'Reply to **each** of the 27 comments (established "Done — ..." style); for 3851331565 answer the question (not in the current book version → removed)',
+		);
+		expect(result.tasks[0].reason).toBeUndefined();
+	});
+
+	it("keeps colons in task descriptions", () => {
+		const input = `# Plan: Test
+
+- TODO: sheet2: renumber items to book numbers: Example 4.1.10 → 4.2.19
+- BLOCKED: sheet3a: fix header — Source: Section 4.3 (was 4.2) — waiting on maintainer`;
+
+		const result = parsePlan(input);
+		expect(result.tasks[0].text).toBe(
+			"sheet2: renumber items to book numbers: Example 4.1.10 → 4.2.19",
+		);
+		expect(result.tasks[0].reason).toBeUndefined();
+		// Colons in the description are kept; the reason starts after the
+		// LAST " — " separator.
+		expect(result.tasks[1].text).toBe("sheet3a: fix header — Source: Section 4.3 (was 4.2)");
+		expect(result.tasks[1].reason).toBe("waiting on maintainer");
+	});
+
+	it("splits BLOCKED description from reason at the LAST separator", () => {
+		const input = `# Plan: Test
+
+- BLOCKED: sheet2 — renumber 4.1.10 to 4.2.19 — maintainer asked to redo it first`;
+
+		const result = parsePlan(input);
+		// The extension always APPENDS the reason, so the last separator is
+		// the boundary; emdashes in the description stay intact.
+		expect(result.tasks[0].text).toBe("sheet2 — renumber 4.1.10 to 4.2.19");
+		expect(result.tasks[0].reason).toBe("maintainer asked to redo it first");
+	});
+
+	it("splits UNKNOWN description from reason at the LAST separator", () => {
+		const input = `# Plan: Test
+
+- UNKNOWN: sheet3b — add the √2 example — Task completed but outcome was unclear (task_complete was not called)`;
+
+		const result = parsePlan(input);
+		expect(result.tasks[0].text).toBe("sheet3b — add the √2 example");
+		expect(result.tasks[0].reason).toBe(
+			"Task completed but outcome was unclear (task_complete was not called)",
+		);
+	});
+
+	it("BLOCKED without separator keeps the whole line as text", () => {
+		const input = `# Plan: Test
+
+- BLOCKED: Sheet 2 header update`;
+
+		const result = parsePlan(input);
+		expect(result.tasks[0].text).toBe("Sheet 2 header update");
+		expect(result.tasks[0].reason).toBeUndefined();
 	});
 
 	it("ignores non-task lines", () => {
@@ -193,6 +257,27 @@ describe("serializePlan", () => {
 		expect(reparsed.goal).toBe(parsed.goal);
 		expect(reparsed.tasks).toEqual(parsed.tasks);
 	});
+
+	it("round-trips byte-identically with emdashes in TODO/DONE descriptions", () => {
+		// Regression for the review.md incident: every line started with a
+		// "sheetN — " prefix and the instructions lived after the first
+		// emdash. Under the new rules the whole line is the description and
+		// parse + serialize must be byte-identical.
+		const original = `# Plan: Address PR #61 review round 4
+
+- DONE: Re-verify the inventory above against GitHub and confirm exactly these 27 comment ids
+- TODO: sheet2 — renumber items to book numbers: Example 4.1.10 → 4.2.19 (comments 2, 3, 5)
+- TODO: sheet2 — add book Example 4.2.16 (product identity) as a visible example (comment 6)
+- BLOCKED: sheet2 — update the header comment block and the design note — the 4.2.16 example task was interrupted
+- UNKNOWN: sheet3b — add the sqrt-2 example — Task completed but outcome was unclear (task_complete was not called)`;
+
+		const parsed = parsePlan(original);
+		expect(serializePlan(parsed)).toBe(original);
+
+		// And stable across repeated round-trips.
+		const reparsed = parsePlan(serializePlan(parsed));
+		expect(reparsed.tasks).toEqual(parsed.tasks);
+	});
 });
 
 // ── updateTaskStatus ──────────────────────────────────────────────────────
@@ -246,7 +331,7 @@ describe("updateTaskStatus", () => {
 		expect(result).toBeNull();
 	});
 
-	it("clears reason when marking DONE", () => {
+	it("keeps existing reason when marking DONE (no silent content loss)", () => {
 		const data: PlanFileData = {
 			goal: "Test",
 			tasks: [
@@ -255,10 +340,30 @@ describe("updateTaskStatus", () => {
 		};
 
 		updateTaskStatus(data, 1, "DONE");
-		expect(data.tasks[0].reason).toBeUndefined();
+		expect(data.tasks[0].status).toBe("DONE");
+		expect(data.tasks[0].reason).toBe("old reason");
 	});
 
-	it("preserves reason when updating to same status", () => {
+	it("keeps description content parked in reason when marking DONE", () => {
+		// Regression: a line written as "TODO: sheet2 — full instructions" was
+		// parsed with the instructions as reason and then DROPPED when the
+		// task was marked DONE, leaving only "sheet2" in the plan file.
+		const data: PlanFileData = {
+			goal: "Test",
+			tasks: [
+				{ index: 1, text: "sheet2", status: "TODO", reason: "renumber items to book numbers" },
+			],
+		};
+
+		updateTaskStatus(data, 1, "DONE");
+		expect(data.tasks[0].reason).toBe("renumber items to book numbers");
+		// And the serialized line still contains the full instruction.
+		expect(serializePlan(data)).toContain(
+			"- DONE: sheet2 — renumber items to book numbers",
+		);
+	});
+
+	it("preserves reason when updating to same status without new reason", () => {
 		const data: PlanFileData = {
 			goal: "Test",
 			tasks: [
@@ -268,6 +373,18 @@ describe("updateTaskStatus", () => {
 
 		updateTaskStatus(data, 1, "BLOCKED");
 		expect(data.tasks[0].reason).toBe("existing");
+	});
+
+	it("replaces reason when a new reason is given", () => {
+		const data: PlanFileData = {
+			goal: "Test",
+			tasks: [
+				{ index: 1, text: "Task", status: "BLOCKED", reason: "old reason" },
+			],
+		};
+
+		updateTaskStatus(data, 1, "BLOCKED", "new reason");
+		expect(data.tasks[0].reason).toBe("new reason");
 	});
 });
 
