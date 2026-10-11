@@ -221,7 +221,7 @@ describe("serializePlan", () => {
 		};
 
 		const output = serializePlan(data);
-		expect(output).toContain("- BLOCKED: Blocked task — no API docs");
+		expect(output).toContain("- BLOCKED: Blocked task\n  reason: no API docs\n");
 	});
 
 	it("serializes UNKNOWN task with reason", () => {
@@ -233,7 +233,7 @@ describe("serializePlan", () => {
 		};
 
 		const output = serializePlan(data);
-		expect(output).toContain("- UNKNOWN: Unclear — ambiguous");
+		expect(output).toContain("- UNKNOWN: Unclear\n  reason: ambiguous\n");
 	});
 
 	it("serializes empty plan", () => {
@@ -258,25 +258,93 @@ describe("serializePlan", () => {
 		expect(reparsed.tasks).toEqual(parsed.tasks);
 	});
 
-	it("round-trips byte-identically with emdashes in TODO/DONE descriptions", () => {
+	it("round-trips byte-identically with emdashes in descriptions", () => {
 		// Regression for the review.md incident: every line started with a
 		// "sheetN — " prefix and the instructions lived after the first
-		// emdash. Under the new rules the whole line is the description and
-		// parse + serialize must be byte-identical.
+		// emdash. The whole line is the description; parse + serialize must
+		// be byte-identical.
 		const original = `# Plan: Address PR #61 review round 4
 
 - DONE: Re-verify the inventory above against GitHub and confirm exactly these 27 comment ids
 - TODO: sheet2 — renumber items to book numbers: Example 4.1.10 → 4.2.19 (comments 2, 3, 5)
-- TODO: sheet2 — add book Example 4.2.16 (product identity) as a visible example (comment 6)
-- BLOCKED: sheet2 — update the header comment block and the design note — the 4.2.16 example task was interrupted
-- UNKNOWN: sheet3b — add the sqrt-2 example — Task completed but outcome was unclear (task_complete was not called)`;
+- PARTIAL: sheet2 — add book Example 4.2.16 (product identity) as a visible example (comment 6)
+  reason: example added — cross-references still missing
+- BLOCKED: sheet2 — update the header comment block and the design note
+  reason: the 4.2.16 example task was interrupted
+`;
 
 		const parsed = parsePlan(original);
+		expect(parsed.tasks[2].text).toBe(
+			"sheet2 — add book Example 4.2.16 (product identity) as a visible example (comment 6)",
+		);
+		expect(parsed.tasks[2].reason).toBe("example added — cross-references still missing");
 		expect(serializePlan(parsed)).toBe(original);
+	});
 
-		// And stable across repeated round-trips.
-		const reparsed = parsePlan(serializePlan(parsed));
-		expect(reparsed.tasks).toEqual(parsed.tasks);
+	it("migrates legacy ' — reason' lines to reason lines on write", () => {
+		const legacy = `# Plan: Old
+
+- BLOCKED: sheet2 — update the header — the example task was interrupted
+- UNKNOWN: sheet3b — add the example — Task completed but outcome was unclear
+- TODO: sheet4 — keep — this whole line is the description`;
+
+		const parsed = parsePlan(legacy);
+		expect(parsed.tasks[0]).toMatchObject({
+			text: "sheet2 — update the header",
+			reason: "the example task was interrupted",
+		});
+		expect(parsed.tasks[2].text).toBe("sheet4 — keep — this whole line is the description");
+		expect(parsed.tasks[2].reason).toBeUndefined();
+
+		const written = serializePlan(parsed);
+		expect(written).toContain(
+			"- UNKNOWN: sheet3b — add the example\n  reason: Task completed but outcome was unclear\n",
+		);
+		// The migrated form is stable.
+		expect(serializePlan(parsePlan(written))).toBe(written);
+	});
+
+	it("does not split a legacy reason off a line that has a reason line", () => {
+		const parsed = parsePlan(`# Plan: X
+
+- BLOCKED: a — b
+  reason: c`);
+		expect(parsed.tasks[0]).toMatchObject({ text: "a — b", reason: "c" });
+	});
+
+	it("attaches a reason line only to the task directly above it", () => {
+		const parsed = parsePlan(`# Plan: X
+
+- TODO: a
+
+  reason: stray
+- PARTIAL: b
+  reason: half done
+  reason: second reason line is ignored`);
+		expect(parsed.tasks[0].reason).toBeUndefined();
+		expect(parsed.tasks[1].reason).toBe("half done");
+	});
+
+	it("parses every status", () => {
+		const parsed = parsePlan(`# Plan: X
+
+- TODO: a
+- DONE: b
+- PARTIAL: c
+- BLOCKED: d
+- FALSE: e
+- UNKNOWN: f`);
+		expect(parsed.tasks.map((t) => t.status)).toEqual([
+			"TODO", "DONE", "PARTIAL", "BLOCKED", "FALSE", "UNKNOWN",
+		]);
+	});
+
+	it("collapses a multi-line reason onto one line", () => {
+		const out = serializePlan({
+			goal: "X",
+			tasks: [{ index: 1, text: "a", status: "PARTIAL", reason: "one\ntwo" }],
+		});
+		expect(out).toContain("  reason: one two\n");
 	});
 });
 
@@ -331,39 +399,21 @@ describe("updateTaskStatus", () => {
 		expect(result).toBeNull();
 	});
 
-	it("keeps existing reason when marking DONE (no silent content loss)", () => {
+	it("clears a stale reason when marking DONE", () => {
 		const data: PlanFileData = {
 			goal: "Test",
 			tasks: [
-				{ index: 1, text: "Task", status: "BLOCKED", reason: "old reason" },
+				{ index: 1, text: "Task", status: "UNKNOWN", reason: "Never started" },
 			],
 		};
 
 		updateTaskStatus(data, 1, "DONE");
 		expect(data.tasks[0].status).toBe("DONE");
-		expect(data.tasks[0].reason).toBe("old reason");
+		expect(data.tasks[0].reason).toBeUndefined();
+		expect(serializePlan(data)).not.toContain("Never started");
 	});
 
-	it("keeps description content parked in reason when marking DONE", () => {
-		// Regression: a line written as "TODO: sheet2 — full instructions" was
-		// parsed with the instructions as reason and then DROPPED when the
-		// task was marked DONE, leaving only "sheet2" in the plan file.
-		const data: PlanFileData = {
-			goal: "Test",
-			tasks: [
-				{ index: 1, text: "sheet2", status: "TODO", reason: "renumber items to book numbers" },
-			],
-		};
-
-		updateTaskStatus(data, 1, "DONE");
-		expect(data.tasks[0].reason).toBe("renumber items to book numbers");
-		// And the serialized line still contains the full instruction.
-		expect(serializePlan(data)).toContain(
-			"- DONE: sheet2 — renumber items to book numbers",
-		);
-	});
-
-	it("preserves reason when updating to same status without new reason", () => {
+	it("records the reason of the latest outcome", () => {
 		const data: PlanFileData = {
 			goal: "Test",
 			tasks: [
@@ -371,8 +421,8 @@ describe("updateTaskStatus", () => {
 			],
 		};
 
-		updateTaskStatus(data, 1, "BLOCKED");
-		expect(data.tasks[0].reason).toBe("existing");
+		updateTaskStatus(data, 1, "PARTIAL", "  7 lemmas proved  ");
+		expect(data.tasks[0]).toMatchObject({ status: "PARTIAL", reason: "7 lemmas proved" });
 	});
 
 	it("replaces reason when a new reason is given", () => {
@@ -463,13 +513,13 @@ describe("countByStatus", () => {
 		};
 
 		const counts = countByStatus(data);
-		expect(counts).toEqual({ TODO: 1, DONE: 2, BLOCKED: 1, UNKNOWN: 0 });
+		expect(counts).toEqual({ TODO: 1, DONE: 2, PARTIAL: 0, BLOCKED: 1, FALSE: 0, UNKNOWN: 0 });
 	});
 
 	it("returns zeros for empty plan", () => {
 		const data: PlanFileData = { goal: "Empty", tasks: [] };
 		const counts = countByStatus(data);
-		expect(counts).toEqual({ TODO: 0, DONE: 0, BLOCKED: 0, UNKNOWN: 0 });
+		expect(counts).toEqual({ TODO: 0, DONE: 0, PARTIAL: 0, BLOCKED: 0, FALSE: 0, UNKNOWN: 0 });
 	});
 });
 

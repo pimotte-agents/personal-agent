@@ -1,188 +1,256 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+	buildCommitMessage,
+	buildTaskMessage,
+	changedSince,
 	commitTask,
 	extractBlockedReason,
 	filterTaskContext,
+	parsePorcelainZ,
 	resolveTaskOutcome,
+	runHook,
+	snapshotDirty,
+	stashPaths,
+	tailText,
 	type GitExec,
 	type SessionBranchEntry,
 	type ContextMessage,
 } from "../execution.js";
 
+type Call = { cmd: string; args: string[] };
+type Reply = { code: number; stdout: string; stderr: string };
+const ok = (stdout = ""): Reply => ({ code: 0, stdout, stderr: "" });
+const fail = (stderr = "", code = 1): Reply => ({ code, stdout: "", stderr });
+
+/** An executor that records calls and answers with `fn` (default: success). */
+function mockExec(fn: (cmd: string, args: string[]) => Reply = () => ok()): {
+	executor: GitExec;
+	calls: Call[];
+} {
+	const calls: Call[] = [];
+	return {
+		calls,
+		executor: {
+			exec: vi.fn(async (cmd: string, args: string[]) => {
+				calls.push({ cmd, args });
+				return fn(cmd, args);
+			}),
+		},
+	};
+}
+
 // ── commitTask ─────────────────────────────────────────────────────────────
 
 describe("commitTask", () => {
-	let execCalls: Array<{ cmd: string; args: string[] }> = [];
-	let executor: GitExec;
-
-	function makeMockExec(fn?: (cmd: string, args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>) {
-		const handler = vi.fn(async (cmd: string, args: string[]) => {
-			execCalls.push({ cmd, args });
-			if (fn) return fn(cmd, args);
-			// Default: success for everything
-			if (cmd === "git" && args[0] === "status") return { code: 0, stdout: "", stderr: "" };
-			if (cmd === "git" && args[0] === "add") return { code: 0, stdout: "", stderr: "" };
-			if (cmd === "git" && args[0] === "diff") return { code: 1, stdout: "", stderr: "" };
-			if (cmd === "git" && args[0] === "commit") return { code: 0, stdout: "", stderr: "" };
-			return { code: 0, stdout: "", stderr: "" };
-		});
-		return handler;
-	}
-
-	beforeEach(() => {
-		execCalls = [];
-		executor = { exec: makeMockExec() };
-	});
-
-	it("commits successfully when there are changes", async () => {
-		const result = await commitTask(
-			executor,
-			"/project",
-			1,
-			"Set up auth",
-			"DONE",
+	it("stages and commits exactly the given paths, never add -A without pathspec", async () => {
+		const { executor, calls } = mockExec((cmd, args) =>
+			args[0] === "diff" ? fail() : ok(),
 		);
+		const result = await commitTask(executor, "/p", ["a.lean", ".pi/plan.md"], "msg");
 
 		expect(result).toBe("committed");
-		expect(execCalls).toHaveLength(5);
-		expect(execCalls[0]).toEqual({ cmd: "git", args: ["status", "--porcelain"] });
-		expect(execCalls[1]).toEqual({ cmd: "git", args: ["add", "-A"] });
-		expect(execCalls[2]).toEqual({ cmd: "git", args: ["diff", "--cached", "--quiet"] });
-		expect(execCalls[3]).toEqual({ cmd: "git", args: ["status", "--porcelain", "--untracked-files=only"] });
-		expect(execCalls[4]).toEqual({
-			cmd: "git",
-			args: ["commit", "-m", "plan: task 1: Set up auth (DONE)"],
-		});
+		expect(calls.map((c) => c.args)).toEqual([
+			["status", "--porcelain"],
+			["add", "-A", "--", "a.lean", ".pi/plan.md"],
+			["diff", "--cached", "--quiet", "--", "a.lean", ".pi/plan.md"],
+			["commit", "-m", "msg", "--", "a.lean", ".pi/plan.md"],
+		]);
+		for (const c of calls) {
+			if (c.args[0] === "add") expect(c.args).toContain("--");
+		}
 	});
 
-	it("returns 'nothing to commit' when no changes", async () => {
-		// Override: diff returns 0 (no changes), status returns empty
-		executor.exec = vi.fn(async (cmd, args) => {
-			if (cmd === "git" && args[0] === "status") {
-				return { code: 0, stdout: "", stderr: "" };
-			}
-			if (cmd === "git" && args[0] === "add") {
-				return { code: 0, stdout: "", stderr: "" };
-			}
-			if (cmd === "git" && args[0] === "diff") {
-				return { code: 0, stdout: "", stderr: "" }; // no changes
-			}
-			return { code: 0, stdout: "", stderr: "" };
-		});
+	it("returns 'nothing to commit' when the paths have no staged change", async () => {
+		const { executor, calls } = mockExec(() => ok());
+		expect(await commitTask(executor, "/p", ["a"], "m")).toBe("nothing to commit");
+		expect(calls.some((c) => c.args[0] === "commit")).toBe(false);
+	});
 
-		const result = await commitTask(executor, "/project", 1, "Task", "DONE");
-		expect(result).toBe("nothing to commit");
+	it("returns 'nothing to commit' for an empty path list without staging", async () => {
+		const { executor, calls } = mockExec();
+		expect(await commitTask(executor, "/p", [], "m")).toBe("nothing to commit");
+		expect(calls).toHaveLength(1);
 	});
 
 	it("returns 'not a git repo' when git status fails", async () => {
-		execCalls = [];
-		executor.exec = makeMockExec(async () => ({
-			code: 1,
-			stdout: "",
-			stderr: "fatal: not a git repository",
-		}));
-
-		const result = await commitTask(executor, "/project", 1, "Task", "DONE");
-		expect(result).toBe("not a git repo");
-		expect(execCalls).toHaveLength(1); // only git status, no further calls
+		const { executor, calls } = mockExec(() => fail("fatal"));
+		expect(await commitTask(executor, "/p", ["a"], "m")).toBe("not a git repo");
+		expect(calls).toHaveLength(1);
 	});
 
-	it("returns error on git add failure", async () => {
-		execCalls = [];
-		executor.exec = makeMockExec(async (cmd, args) => {
-			if (cmd === "git" && args[0] === "status") {
-				return { code: 0, stdout: "", stderr: "" };
-			}
-			if (cmd === "git" && args[0] === "add") {
-				return { code: 1, stdout: "", stderr: "permission denied" };
-			}
-			return { code: 0, stdout: "", stderr: "" };
-		});
-
-		const result = await commitTask(executor, "/project", 1, "Task", "DONE");
-		expect(result).toBe("git add failed: permission denied");
+	it("reports git add and git commit failures", async () => {
+		const addFails = mockExec((_c, args) => (args[0] === "add" ? fail("denied") : ok()));
+		expect(await commitTask(addFails.executor, "/p", ["a"], "m")).toBe(
+			"git add failed: denied",
+		);
+		const commitFails = mockExec((_c, args) =>
+			args[0] === "diff" ? fail() : args[0] === "commit" ? fail("no author") : ok(),
+		);
+		expect(await commitTask(commitFails.executor, "/p", ["a"], "m")).toBe(
+			"git commit failed: no author",
+		);
 	});
 
-	it("returns error on git commit failure", async () => {
-		execCalls = [];
-		executor.exec = makeMockExec(async (cmd, args) => {
-			if (cmd === "git" && args[0] === "status") {
-				return { code: 0, stdout: "", stderr: "" };
-			}
-			if (cmd === "git" && args[0] === "add") {
-				return { code: 0, stdout: "", stderr: "" };
-			}
-			if (cmd === "git" && args[0] === "diff") {
-				return { code: 1, stdout: "", stderr: "" };
-			}
-			if (cmd === "git" && args[0] === "commit") {
-				return { code: 1, stdout: "", stderr: "no author specified" };
-			}
-			return { code: 0, stdout: "", stderr: "" };
-		});
+	it("catches exceptions", async () => {
+		const executor: GitExec = {
+			exec: vi.fn(async () => {
+				throw new Error("boom");
+			}),
+		};
+		expect(await commitTask(executor, "/p", ["a"], "m")).toBe("git commit error");
+	});
+});
 
-		const result = await commitTask(executor, "/project", 1, "Task", "DONE");
-		expect(result).toBe("git commit failed: no author specified");
+// ── buildCommitMessage ─────────────────────────────────────────────────────
+
+describe("buildCommitMessage", () => {
+	it("keeps a short task on one line", () => {
+		expect(buildCommitMessage(3, "Prove foo in A.lean", "DONE")).toBe(
+			"plan: task 3 (DONE): Prove foo in A.lean",
+		);
 	});
 
-	it("handles untracked files for 'nothing to commit' check", async () => {
-		execCalls = [];
-		executor.exec = makeMockExec(async (cmd, args) => {
-			if (cmd === "git" && args[0] === "status") {
-				if (args.includes("--untracked-files=only")) {
-					return { code: 0, stdout: "? new-file.js\n", stderr: "" };
-				}
-				return { code: 0, stdout: "", stderr: "" };
-			}
-			if (cmd === "git" && args[0] === "add") {
-				return { code: 0, stdout: "", stderr: "" };
-			}
-			if (cmd === "git" && args[0] === "diff") {
-				return { code: 0, stdout: "", stderr: "" }; // no tracked changes
-			}
-			if (cmd === "git" && args[0] === "commit") {
-				return { code: 0, stdout: "", stderr: "" };
-			}
-			return { code: 0, stdout: "", stderr: "" };
-		});
-
-		const result = await commitTask(executor, "/project", 1, "Task", "DONE");
-		expect(result).toBe("committed");
+	it("truncates a long task to a <=72-char subject and puts the rest in the body", () => {
+		const text = `Prove covering_half in UnionClosed/Conjectures/Covering.lean. ${"x".repeat(300)}`;
+		const msg = buildCommitMessage(7, text, "PARTIAL", "lemmas proved", "summary here");
+		const [subject, ...rest] = msg.split("\n");
+		expect(subject.length).toBeLessThanOrEqual(72);
+		expect(subject.startsWith("plan: task 7 (PARTIAL): Prove covering_half")).toBe(true);
+		expect(subject.endsWith("…")).toBe(true);
+		const body = rest.join("\n");
+		expect(body).toContain(`Task: ${text}`);
+		expect(body).toContain("Reason: lemmas proved");
+		expect(body).toContain("Summary: summary here");
 	});
 
-	it("catches exceptions and returns error", async () => {
-		execCalls = [];
-		executor.exec = makeMockExec(async () => {
-			throw new Error("unexpected error");
-		});
+	it("does not repeat a summary equal to the reason", () => {
+		const msg = buildCommitMessage(1, "t", "BLOCKED", "why", "why");
+		expect(msg.match(/why/g)).toHaveLength(1);
+	});
+});
 
-		const result = await commitTask(executor, "/project", 1, "Task", "DONE");
-		expect(result).toBe("git commit error");
+// ── snapshots ──────────────────────────────────────────────────────────────
+
+describe("parsePorcelainZ", () => {
+	it("parses modified, untracked, deleted and renamed entries", () => {
+		const out = parsePorcelainZ(
+			" M a.lean\0?? dir/new file.lean\0 D gone.lean\0R  new.lean\0old.lean\0",
+		);
+		expect(out).toEqual([
+			{ path: "a.lean", deleted: false },
+			{ path: "dir/new file.lean", deleted: false },
+			{ path: "gone.lean", deleted: true },
+			{ path: "new.lean", deleted: false },
+		]);
 	});
 
-	it("includes task index and status in commit message", async () => {
-		execCalls = [];
-		let capturedMsg = "";
-		executor.exec = makeMockExec(async (cmd, args) => {
-			if (cmd === "git" && args[0] === "status") {
-				return { code: 0, stdout: "", stderr: "" };
-			}
-			if (cmd === "git" && args[0] === "add") {
-				return { code: 0, stdout: "", stderr: "" };
-			}
-			if (cmd === "git" && args[0] === "diff") {
-				return { code: 1, stdout: "", stderr: "" }; // changes
-			}
-			if (cmd === "git" && args[0] === "commit") {
-				capturedMsg = args[2];
-				return { code: 0, stdout: "", stderr: "" };
-			}
-			return { code: 0, stdout: "", stderr: "" };
-		});
+	it("handles empty output", () => {
+		expect(parsePorcelainZ("")).toEqual([]);
+	});
+});
 
-		const result = await commitTask(executor, "/project", 3, "Add middleware", "BLOCKED");
-		expect(result).toBe("committed");
-		expect(capturedMsg).toBe("plan: task 3: Add middleware (BLOCKED)");
+describe("snapshotDirty", () => {
+	it("hashes every dirty file and marks deletions", async () => {
+		const { executor } = mockExec((_c, args) => {
+			if (args[0] === "status") return ok(" M a\0 D b\0?? c\0");
+			if (args[0] === "hash-object") return ok(`hash-${args[2]}\n`);
+			return ok();
+		});
+		const snap = await snapshotDirty(executor, "/p");
+		expect(snap && Object.fromEntries(snap)).toEqual({
+			a: "hash-a",
+			b: "<deleted>",
+			c: "hash-c",
+		});
+	});
+
+	it("returns null outside a git repository", async () => {
+		const { executor } = mockExec(() => fail("fatal"));
+		expect(await snapshotDirty(executor, "/p")).toBeNull();
+	});
+});
+
+describe("changedSince", () => {
+	it("returns new, modified and reverted files, not unchanged pre-existing dirt", () => {
+		const before = new Map([
+			["user-wip.md", "h1"], // dirty before, untouched by the task
+			["edited.lean", "h2"], // dirty before, edited again by the task
+			["reverted.lean", "h3"], // dirty before, reverted by the task
+		]);
+		const now = new Map([
+			["user-wip.md", "h1"],
+			["edited.lean", "h2b"],
+			["new.lean", "h4"],
+		]);
+		expect(changedSince(before, now)).toEqual(["edited.lean", "new.lean", "reverted.lean"]);
+	});
+});
+
+describe("stashPaths", () => {
+	it("stashes only the given paths, including untracked ones", async () => {
+		const { executor, calls } = mockExec();
+		expect(await stashPaths(executor, "/p", ["x.lean"], "label")).toBe(true);
+		expect(calls[0].args).toEqual([
+			"stash", "push", "--include-untracked", "-m", "label", "--", "x.lean",
+		]);
+	});
+
+	it("does nothing for no paths and reports failure", async () => {
+		const none = mockExec();
+		expect(await stashPaths(none.executor, "/p", [], "l")).toBe(true);
+		expect(none.calls).toHaveLength(0);
+		const bad = mockExec(() => fail());
+		expect(await stashPaths(bad.executor, "/p", ["x"], "l")).toBe(false);
+	});
+});
+
+// ── hooks ──────────────────────────────────────────────────────────────────
+
+describe("runHook", () => {
+	it("reports a missing hook without running it", async () => {
+		const { executor, calls } = mockExec(() => fail());
+		const r = await runHook(executor, "/p", "verify-done", ["a"], 1000);
+		expect(r.exists).toBe(false);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toEqual({ cmd: "test", args: ["-x", ".pi/hooks/verify-done"] });
+	});
+
+	it("runs an existing hook and returns its result", async () => {
+		const { executor, calls } = mockExec((cmd) =>
+			cmd === "test" ? ok() : { code: 1, stdout: "bad.lean\n", stderr: "err" },
+		);
+		const r = await runHook(executor, "/p", "check-files", ["bad.lean"], 1000);
+		expect(r).toEqual({ exists: true, code: 1, stdout: "bad.lean\n", stderr: "err" });
+		expect(calls[1]).toEqual({ cmd: ".pi/hooks/check-files", args: ["bad.lean"] });
+	});
+});
+
+describe("tailText", () => {
+	it("keeps short text and the end of long text", () => {
+		expect(tailText("  short  ")).toBe("short");
+		expect(tailText("abcdefghij", 4)).toBe("…ghij");
+	});
+});
+
+// ── buildTaskMessage ───────────────────────────────────────────────────────
+
+describe("buildTaskMessage", () => {
+	it("starts with the task prompt the context filter keys on", () => {
+		const msg = buildTaskMessage({ index: 2, text: "Prove x in A.lean" }, 5, "g", ".pi/p.md");
+		expect(msg.startsWith("Execute task 2 of 5: Prove x in A.lean")).toBe(true);
+		expect(msg).toContain("Full plan file: .pi/p.md");
+		expect(msg).toContain("- PARTIAL:");
+		expect(msg).not.toContain("earlier attempt");
+	});
+
+	it("passes on the reason of an earlier attempt", () => {
+		const msg = buildTaskMessage(
+			{ index: 2, text: "t", reason: "7 lemmas proved" },
+			5,
+			"g",
+			".pi/p.md",
+		);
+		expect(msg).toContain("Outcome of an earlier attempt: 7 lemmas proved");
 	});
 });
 
@@ -390,101 +458,124 @@ describe("extractBlockedReason", () => {
 // ── filterTaskContext ──────────────────────────────────────────────────────
 
 describe("filterTaskContext", () => {
+	const marker = (n: number): ContextMessage => ({
+		role: "custom",
+		customType: "plan-marker",
+		content: `--- Task ${n} ---`,
+	});
+	const prompt = (n: number): ContextMessage => ({
+		role: "user",
+		content: [{ type: "text", text: `Execute task ${n} of 20: do thing ${n}` }],
+	});
+
 	it("returns undefined when not running", () => {
-		const messages: ContextMessage[] = [
-			{ customType: "plan-marker" },
-			{ role: "user" },
-		];
-
-		const result = filterTaskContext(messages, false);
-		expect(result).toBeUndefined();
+		const messages = [marker(1), prompt(1)];
+		expect(filterTaskContext(messages, false)).toBeUndefined();
 	});
 
-	it("returns undefined when no marker exists", () => {
+	it("returns undefined when no task prompt exists", () => {
 		const messages: ContextMessage[] = [
-			{ role: "user" },
+			{ role: "user", content: "hello" },
 			{ role: "assistant" },
 		];
-
-		const result = filterTaskContext(messages, true);
-		expect(result).toBeUndefined();
+		expect(filterTaskContext(messages, true)).toBeUndefined();
 	});
 
-	it("filters to keep only messages from the marker onward", () => {
+	it("keeps the marker and everything from the task prompt onward", () => {
 		const messages: ContextMessage[] = [
-			{ role: "user", text: "old conversation" },
-			{ role: "assistant", text: "old response" },
-			{ role: "user", text: "/plan execute" },
-			{ customType: "plan-marker", content: "--- Task 2 ---" },
-			{ role: "user", text: "Execute task 2: Add middleware" },
-			{ role: "assistant", text: "Working on it..." },
-		];
-
-		const result = filterTaskContext(messages, true);
-		expect(result).toHaveLength(3);
-		expect(result![0].customType).toBe("plan-marker");
-		expect(result![1].role).toBe("user");
-		expect(result![2].role).toBe("assistant");
-	});
-
-	it("keeps the marker itself in the filtered messages", () => {
-		const messages: ContextMessage[] = [
-			{ role: "user", text: "before" },
-			{ customType: "plan-marker" },
-			{ role: "user", text: "task message" },
-		];
-
-		const result = filterTaskContext(messages, true);
-		expect(result).toHaveLength(2);
-		expect(result![0].customType).toBe("plan-marker");
-	});
-
-	it("returns all messages when marker is at index 0", () => {
-		const messages: ContextMessage[] = [
-			{ customType: "plan-marker" },
-			{ role: "user" },
+			{ role: "user", content: "old conversation" },
+			{ role: "assistant" },
+			marker(2),
+			prompt(2),
 			{ role: "assistant" },
 		];
-
 		const result = filterTaskContext(messages, true);
-		expect(result).toHaveLength(3);
+		expect(result).toEqual(messages.slice(2));
 	});
 
-	it("uses the last marker if multiple exist", () => {
+	it("cuts at the LAST task, not the first (context must reset per task)", () => {
 		const messages: ContextMessage[] = [
-			{ role: "user", text: "before task 1" },
-			{ customType: "plan-marker", content: "--- Task 1 ---" },
-			{ role: "user", text: "task 1 message" },
-			{ role: "assistant", text: "task 1 done" },
-			{ customType: "plan-marker", content: "--- Task 2 ---" },
-			{ role: "user", text: "task 2 message" },
-		];
-
-		const result = filterTaskContext(messages, true);
-		// findIndex finds the FIRST marker, not the last
-		// This is the intended behavior — we keep from the first marker
-		expect(result).toHaveLength(5); // from first marker onward
-		expect(result![0].customType).toBe("plan-marker");
-		expect(result![0].content).toBe("--- Task 1 ---");
-	});
-
-	it("filters correctly with mixed message types", () => {
-		const messages: ContextMessage[] = [
-			{ role: "user", text: "plan creation" },
-			{ role: "assistant", text: "created plan" },
-			{ customType: "plan-summary", content: "summary" },
-			{ customType: "plan-marker", content: "--- Task 1 ---" },
-			{ role: "user", text: "task 1" },
+			marker(1),
+			prompt(1),
+			{ role: "assistant" },
 			{ role: "toolResult" },
-			{ role: "assistant", text: "done" },
+			marker(2),
+			prompt(2),
+			{ role: "assistant" },
+			marker(3),
+			prompt(3),
+			{ role: "assistant" },
 		];
-
 		const result = filterTaskContext(messages, true);
-		expect(result).toHaveLength(4);
-		expect(result![0].customType).toBe("plan-marker");
-		expect(result![1].role).toBe("user");
-		expect(result![2].role).toBe("toolResult");
-		expect(result![3].role).toBe("assistant");
+		expect(result).toEqual(messages.slice(7));
+	});
+
+	it("keeps the task prompt when its marker is delivered after it", () => {
+		// Observed in session logs: the queued follow-up prompt lands before
+		// the marker. Cutting at the marker would drop the task statement.
+		const messages: ContextMessage[] = [
+			marker(1),
+			prompt(1),
+			{ role: "assistant" },
+			prompt(2),
+			marker(2),
+			{ role: "assistant" },
+		];
+		const result = filterTaskContext(messages, true);
+		expect(result).toEqual(messages.slice(3));
+		expect(result![0]).toBe(messages[3]);
+	});
+
+	it("accepts string content in the task prompt", () => {
+		const messages: ContextMessage[] = [
+			prompt(1),
+			{ role: "assistant" },
+			{ role: "user", content: "Execute task 2 of 20: next" },
+			{ role: "assistant" },
+		];
+		expect(filterTaskContext(messages, true)).toEqual(messages.slice(2));
+	});
+
+	it("does not reset on continue or persist prompts of the same task", () => {
+		const messages: ContextMessage[] = [
+			marker(4),
+			prompt(4),
+			{ role: "assistant" },
+			{ role: "user", content: "Continue task 4 of 20: do thing 4" },
+			{ role: "assistant" },
+			{ role: "user", content: "Final attempt for task 4 of 20: do thing 4" },
+		];
+		expect(filterTaskContext(messages, true)).toEqual(messages);
+	});
+
+	it("ignores task-prompt text in non-user messages", () => {
+		const messages: ContextMessage[] = [
+			prompt(1),
+			{ role: "assistant", content: [{ type: "text", text: "Execute task 9 of 20: x" }] },
+			{ role: "toolResult", content: [{ type: "text", text: "Execute task 9 of 20: x" }] },
+		];
+		expect(filterTaskContext(messages, true)).toEqual(messages);
+	});
+
+	it("returns undefined when compaction removed the task prompt", () => {
+		// The summary is the only record of the task; a stray marker left
+		// after it must not cause it to be cut away.
+		const messages: Array<ContextMessage & { summary?: string }> = [
+			{ role: "compactionSummary", summary: "task 5: did X, next Y" },
+			marker(5),
+			{ role: "assistant" },
+		];
+		expect(filterTaskContext(messages, true)).toBeUndefined();
+	});
+
+	it("drops a compaction summary of earlier tasks once a new task starts", () => {
+		const messages: Array<ContextMessage & { summary?: string }> = [
+			{ role: "compactionSummary", summary: "tasks 1-5" },
+			{ role: "assistant" },
+			marker(6),
+			prompt(6),
+		];
+		expect(filterTaskContext(messages, true)).toEqual(messages.slice(2));
 	});
 });
 

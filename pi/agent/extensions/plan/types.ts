@@ -2,7 +2,24 @@
  * Shared types for the plan extension.
  */
 
-export type TaskStatus = "TODO" | "DONE" | "BLOCKED" | "UNKNOWN";
+/**
+ * TODO    - not attempted yet (the only status that gets executed)
+ * DONE    - finished; for "Prove X in F" tasks, verified sorry-free
+ * PARTIAL - real progress, but the task itself is not finished
+ * BLOCKED - cannot proceed without something from the user
+ * FALSE   - the statement was shown false (its negation proved)
+ * UNKNOWN - the run ended without the model reporting an outcome
+ */
+export type TaskStatus = "TODO" | "DONE" | "PARTIAL" | "BLOCKED" | "FALSE" | "UNKNOWN";
+
+export const TASK_STATUSES: readonly TaskStatus[] = [
+	"TODO",
+	"DONE",
+	"PARTIAL",
+	"BLOCKED",
+	"FALSE",
+	"UNKNOWN",
+];
 
 export interface PlanTask {
 	/** 1-based index in the plan */
@@ -11,7 +28,7 @@ export interface PlanTask {
 	text: string;
 	/** Current status */
 	status: TaskStatus;
-	/** Optional reason for BLOCKED or UNKNOWN */
+	/** Optional outcome note, written on an indented `reason:` line */
 	reason?: string;
 }
 

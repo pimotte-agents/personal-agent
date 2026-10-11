@@ -5,24 +5,36 @@
  *
  *   # Plan: <goal>
  *
- *   - TODO: Task description
- *   - DONE: Task description
- *   - BLOCKED: Task description — reason
- *   - UNKNOWN: Task description — reason
+ *   - TODO: Short task description
+ *   - DONE: Short task description
+ *   - PARTIAL: Short task description
+ *     reason: what was achieved and what is left
  *
- * Only BLOCKED and UNKNOWN tasks carry a reason: the text after the LAST
- * " — " (U+2014) separator on the line. TODO/DONE descriptions may contain
- * " — " freely — the whole rest of the line is the description.
+ * Statuses: TODO, DONE, PARTIAL, BLOCKED, FALSE, UNKNOWN. A task's outcome
+ * note goes on an indented `reason:` line directly below it, never on the
+ * task line, so descriptions may contain " — " and colons freely.
+ *
+ * Legacy format (read, never written): a BLOCKED/UNKNOWN line with no
+ * `reason:` line carries its reason after the LAST " — " separator. Writing
+ * the plan back moves such a reason onto its own line.
+ *
+ * Only the header and the task lines survive a write: keep notes and
+ * evidence in a separate file and reference it from the task.
  */
 
 export type { PlanFileData, PlanTask, TaskStatus } from "./types.js";
-export { PLAN_FILE_NAME, PLAN_DIR } from "./types.js";
+export { PLAN_FILE_NAME, PLAN_DIR, TASK_STATUSES } from "./types.js";
+import { TASK_STATUSES, type PlanFileData, type PlanTask, type TaskStatus } from "./types.js";
 
 // ── Parsing ────────────────────────────────────────────────────────────────
 
 const GOAL_RE = /^#\s*Plan:\s*(.+)$/im;
-const TASK_RE = /^(\s*)- (TODO|DONE|BLOCKED|UNKNOWN):\s*(.+)$/gm;
-const REASON_SEP = " \u2014 "; // " — "
+const TASK_LINE_RE = new RegExp(`^(\\s*)- (${TASK_STATUSES.join("|")}):\\s*(.+)$`);
+const REASON_LINE_RE = /^\s+reason:\s*(.*)$/;
+const LEGACY_REASON_SEP = " \u2014 "; // " — "
+
+/** Longest task description validatePlanSyntax accepts. */
+export const MAX_TASK_TEXT_LENGTH = 200;
 
 /** Parse a plan markdown string into structured data. */
 export function parsePlan(content: string): PlanFileData {
@@ -30,38 +42,49 @@ export function parsePlan(content: string): PlanFileData {
 	const goal = goalMatch ? goalMatch[1].trim() : "";
 
 	const tasks: PlanTask[] = [];
-	let match: RegExpExecArray | null;
+	let last: PlanTask | null = null;
+	let lastHasReasonLine = false;
 
-	while ((match = TASK_RE.exec(content)) !== null) {
-		const rawText = match[3].trim();
-		const status = match[2] as TaskStatus;
-		let text = rawText;
-		let reason: string | undefined;
-
-		// Only BLOCKED and UNKNOWN tasks carry a reason, written after a
-		// " — " separator. TODO/DONE descriptions may contain " — " (and
-		// colons) freely — the whole rest of the line is the description.
-		//
-		// The extension always APPENDS the reason at the end of the line,
-		// so split at the LAST separator to keep descriptions containing
-		// emdashes intact. (If the reason itself contains " — ", the part
-		// before its last separator is read as description — the format is
-		// inherently ambiguous there.)
-		if (status === "BLOCKED" || status === "UNKNOWN") {
-			const sepIndex = rawText.lastIndexOf(REASON_SEP);
+	const finishLast = () => {
+		// Legacy: reason after the last " — " on a BLOCKED/UNKNOWN line.
+		if (
+			last &&
+			!lastHasReasonLine &&
+			(last.status === "BLOCKED" || last.status === "UNKNOWN")
+		) {
+			const sepIndex = last.text.lastIndexOf(LEGACY_REASON_SEP);
 			if (sepIndex !== -1) {
-				text = rawText.slice(0, sepIndex).trim();
-				reason = rawText.slice(sepIndex + REASON_SEP.length).trim();
+				const reason = last.text.slice(sepIndex + LEGACY_REASON_SEP.length).trim();
+				last.text = last.text.slice(0, sepIndex).trim();
+				last.reason = reason || undefined;
 			}
 		}
+	};
 
-		tasks.push({
-			index: tasks.length + 1,
-			text,
-			status,
-			reason: reason || undefined,
-		});
+	for (const line of content.split(/\r?\n/)) {
+		const task = line.match(TASK_LINE_RE);
+		if (task) {
+			finishLast();
+			last = {
+				index: tasks.length + 1,
+				text: task[3].trim(),
+				status: task[2] as TaskStatus,
+			};
+			lastHasReasonLine = false;
+			tasks.push(last);
+			continue;
+		}
+		const reason = line.match(REASON_LINE_RE);
+		if (reason && last && !lastHasReasonLine) {
+			last.reason = reason[1].trim() || undefined;
+			lastHasReasonLine = true;
+			continue;
+		}
+		// Anything else ends the task block.
+		finishLast();
+		last = null;
 	}
+	finishLast();
 
 	return { goal, tasks };
 }
@@ -79,26 +102,23 @@ export function serializePlan(data: PlanFileData): string {
 	lines.push("");
 
 	for (const task of data.tasks) {
-		let line = `- ${task.status}: ${task.text}`;
-
+		lines.push(`- ${task.status}: ${task.text}`);
 		if (task.reason) {
-			line += `${REASON_SEP}${task.reason}`;
+			lines.push(`  reason: ${task.reason.replace(/\s*\n\s*/g, " ").trim()}`);
 		}
-
-		lines.push(line);
 	}
 
-	// Ensure trailing newline
-	if (!lines[lines.length - 1]) {
-		lines.push("");
-	}
-
+	lines.push("");
 	return lines.join("\n");
 }
 
 // ── Mutation helpers ──────────────────────────────────────────────────────
 
-/** Update the status of a task by its 1-based index. */
+/**
+ * Update the status of a task by its 1-based index. The reason always
+ * describes the latest outcome: it is replaced, and cleared when none is
+ * given, so a DONE task never keeps a stale reason from an earlier attempt.
+ */
 export function updateTaskStatus(
 	data: PlanFileData,
 	taskIndex: number,
@@ -109,13 +129,7 @@ export function updateTaskStatus(
 	if (!task) return null;
 
 	task.status = status;
-	if (reason !== undefined) {
-		task.reason = reason;
-	}
-	// An existing reason is kept when moving to TODO/DONE (or when no new
-	// reason is given): it may hold description content that followed a
-	// " — " separator on a BLOCKED/UNKNOWN line, and user content must
-	// never be dropped silently.
+	task.reason = reason?.trim() || undefined;
 
 	return data;
 }
@@ -127,19 +141,17 @@ export function findNextTask(data: PlanFileData): PlanTask | null {
 
 /** Count tasks by status. */
 export function countByStatus(data: PlanFileData): Record<TaskStatus, number> {
-	const counts: Record<TaskStatus, number> = {
-		TODO: 0,
-		DONE: 0,
-		BLOCKED: 0,
-		UNKNOWN: 0,
-	};
+	const counts = Object.fromEntries(TASK_STATUSES.map((s) => [s, 0])) as Record<
+		TaskStatus,
+		number
+	>;
 	for (const task of data.tasks) {
 		counts[task.status]++;
 	}
 	return counts;
 }
 
-/** Check if all tasks are completed (DONE, BLOCKED, or UNKNOWN). */
+/** Check if all tasks have an outcome (no TODO left). */
 export function isPlanComplete(data: PlanFileData): boolean {
 	return data.tasks.length > 0 && data.tasks.every((t) => t.status !== "TODO");
 }
@@ -164,11 +176,14 @@ export function validatePlanSyntax(content: string): string[] {
 		errors.push("No tasks found in the plan. Expected tasks in format: '- TODO: task description'");
 	}
 
-	// Check for empty task descriptions
 	for (const task of parsed.tasks) {
 		if (!task.text.trim()) {
 			errors.push(
 				`Task ${task.index}: Empty task description. Every task must have a description after the status keyword.`,
+			);
+		} else if (task.text.length > MAX_TASK_TEXT_LENGTH) {
+			errors.push(
+				`Task ${task.index}: Description is ${task.text.length} characters (max ${MAX_TASK_TEXT_LENGTH}). Keep each task to one short line and move context and evidence into a notes file that the task references.`,
 			);
 		}
 	}
@@ -176,13 +191,12 @@ export function validatePlanSyntax(content: string): string[] {
 	return errors;
 }
 
-/** Build a summary string like "3 DONE, 1 BLOCKED, 1 UNKNOWN". */
+/** Build a summary string like "3 DONE, 1 PARTIAL, 1 BLOCKED". */
 export function buildSummary(data: PlanFileData): string {
 	const counts = countByStatus(data);
-	const parts: string[] = [];
-	if (counts.DONE > 0) parts.push(`${counts.DONE} DONE`);
-	if (counts.BLOCKED > 0) parts.push(`${counts.BLOCKED} BLOCKED`);
-	if (counts.UNKNOWN > 0) parts.push(`${counts.UNKNOWN} UNKNOWN`);
-	if (counts.TODO > 0) parts.push(`${counts.TODO} TODO`);
-	return parts.join(", ");
+	const order: TaskStatus[] = ["DONE", "FALSE", "PARTIAL", "BLOCKED", "UNKNOWN", "TODO"];
+	return order
+		.filter((s) => counts[s] > 0)
+		.map((s) => `${counts[s]} ${s}`)
+		.join(", ");
 }
