@@ -36,7 +36,15 @@ and review what it returns.
 - First check that the server is available (`curl -sf -m 3 http://host.docker.internal:8080/health`).
   If the check fails, don't use pi; do the work yourself.
 - Run it non-interactively with a self-contained prompt: `pi -p "<task, with file paths and the
-  expected output>"`. It has no access to your conversation.
+  expected output>" </dev/null`. It has no access to your conversation. The `</dev/null` is
+  required: `pi -p` first reads piped stdin, and if stdin is an open pipe it waits forever without
+  output or a session file.
+- Choose the thinking level per task with `--thinking off|low|medium|high|xhigh|max` (default
+  `medium`): `low` or `off` for purely mechanical edits, the default for anything needing
+  judgement. Generation speed is the same at every level; lower levels just think less. Don't use
+  `minimal`: the model's chat template rejects it (HTTP 500).
+- pi is slow (a few minutes for a small multi-file edit is normal); give it generous timeouts
+  rather than abandoning it.
 - **Run at most one pi instance at a time.** The llama-server has limited resources, so wait for
   a running pi to finish before starting another and never launch several in parallel. Pass
   long-running ones through a log file in the background as described under Working habits, and
@@ -67,8 +75,6 @@ and review what it returns.
 - Long-running commands (full builds, searches, experiments): run them in the background with
   output going to a log file, then check the log. Do not poll with long `sleep`s.
 - Keep tool output short (`| head`, `| tail`, `grep`). Read big files by line range.
-- Edit files with the edit/write tools, not `cat > file`, `sed -i` or ad-hoc Python, so edits stay
-  reviewable and undoable.
 - Git: stage the files you changed by name, never `git add -A` / `git add .`. Commit and push
   only when asked, or when the project's instructions say to.
 
