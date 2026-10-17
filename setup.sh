@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 mkdir -p projects
-mkdir -p .docker-cache/npm .docker-cache/elan .docker-cache/gh .docker-cache/claude
+mkdir -p .docker-cache/npm .docker-cache/elan .docker-cache/claude
 
 # Claude Code's config file, not a directory — an empty file isn't valid JSON, and a missing one
 # would make Docker create a directory in its place at mount time.

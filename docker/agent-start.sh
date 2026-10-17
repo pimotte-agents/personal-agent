@@ -8,9 +8,16 @@ if [ ! -x "$ELAN_HOME/bin/elan" ]; then
     | sh -s -- -y --no-modify-path --default-toolchain none
 fi
 
-# Best-effort: no network / no key mounted shouldn't block getting a shell.
-if [ -n "${GITHUB_APP_ID:-}" ] && [ -n "${GITHUB_APP_PRIVATE_KEY_PATH:-}" ]; then
-  gh-app-login || echo "agent-start: gh-app-login failed, continuing without gh auth" >&2
+# Warm the GitHub token cache and surface a broken setup early. Best-effort: no network / no key
+# mounted shouldn't block getting a shell. git and gh fetch tokens on demand from here on.
+if ! sudo -n /usr/local/bin/gh-app-token >/dev/null; then
+  echo "agent-start: couldn't mint a GitHub App token, continuing without GitHub auth" >&2
+fi
+
+# One set of container-wide agent instructions: pi reads ~/.pi/agent/AGENTS.md (tracked in this
+# repo as pi/agent/AGENTS.md); Claude Code reads ~/.claude/CLAUDE.md. Leave a real file alone.
+if [ -f "$HOME/.pi/agent/AGENTS.md" ] && { [ -L "$HOME/.claude/CLAUDE.md" ] || [ ! -e "$HOME/.claude/CLAUDE.md" ]; }; then
+  ln -sfn "$HOME/.pi/agent/AGENTS.md" "$HOME/.claude/CLAUDE.md"
 fi
 
 # Long-lived `claude setup-token` token, so `claude` authenticates against the subscription

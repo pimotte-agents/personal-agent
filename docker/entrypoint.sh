@@ -16,4 +16,13 @@ fi
 # they had on a previous run; make sure the agent user can write them either way.
 chown -R agent:agent /home/agent /workspace
 
+# GitHub App config for gh-app-token, which `agent` can only run via sudo (sudo resets the
+# environment, so it reads this root-only file instead). The key path points under /root, which
+# `agent` can't enter; unset the variables so agents don't go looking for the key.
+if [ -n "${GITHUB_APP_ID:-}" ] && [ -n "${GITHUB_APP_PRIVATE_KEY_PATH:-}" ]; then
+  (umask 077 && printf 'GITHUB_APP_ID=%q\nGITHUB_APP_PRIVATE_KEY_PATH=%q\n' \
+    "$GITHUB_APP_ID" "$GITHUB_APP_PRIVATE_KEY_PATH" > /etc/gh-app.conf)
+fi
+unset GITHUB_APP_ID GITHUB_APP_PRIVATE_KEY_PATH
+
 exec setpriv --reuid=agent --regid=agent --init-groups /usr/local/bin/agent-start.sh "$@"

@@ -31,10 +31,10 @@ Nothing else on your machine is mounted in.
 |---|---|---|---|
 | `./projects` | `/workspace` | no | repos the agent works on |
 | `./bin` | `~/bin` | yes | your own scripts, on `PATH` ahead of everything else |
-| `./pi` | `~/.pi` | yes | pi config, incl. `pi/agent/models.json` (local llama.cpp provider) |
-| `./docker/secrets/github-app.pem` | `/secrets/github-app.pem` (ro) | **no** | GitHub App private key |
+| `./pi` | `~/.pi` | yes | pi config, incl. `pi/agent/models.json` (local llama.cpp provider) and `pi/agent/AGENTS.md` (container-wide agent instructions) |
+| `./docker/secrets/github-app.pem` | `/root/secrets/github-app.pem` (ro, root-only) | **no** | GitHub App private key |
 | `./docker/secrets/claude-oauth-token` | `/secrets/claude-oauth-token` (ro) | **no** | long-lived Claude Code subscription token |
-| `./.docker-cache/{npm,elan,gh,claude}` | `~/.npm`, `~/.elan`, `~/.config/gh`, `~/.claude` | no | tool caches/config, survive rebuilds |
+| `./.docker-cache/{npm,elan,claude}` | `~/.npm`, `~/.elan`, `~/.claude` | no | tool caches/config, survive rebuilds |
 
 `./bin` and `./pi` are meant to be committed (put scripts/config you want to keep in them).
 Everything else under `.docker-cache/`, `projects/`, and `docker/secrets/` is host-local
@@ -50,11 +50,24 @@ llama.cpp server) and drops everything else addressed at the host. This needs `N
 
 ## GitHub auth
 
-The container authenticates `gh` as a GitHub App installation rather than a personal token:
-`docker/gh-app-login.sh` signs a JWT with the mounted private key, mints a short-lived (~1h)
-installation access token, and runs `gh auth login --with-token`. This runs automatically at
-container start (non-fatal if the key isn't there) and is on `PATH` as `gh-app-login` — rerun it
-manually once the hour is up and `gh`/`git push` start failing with 401s.
+`git` and `gh` authenticate as a GitHub App installation rather than with a personal token, and
+fetch a valid token on every call, so nothing expires mid-session:
+
+- `docker/gh-app-token.sh` (`/usr/local/bin/gh-app-token`) signs a JWT with the App's private
+  key, mints a short-lived (~1h) installation access token, and caches it until it has less than
+  10 minutes left.
+- `docker/git-credential-ghapp.sh` is git's credential helper for `https://github.com`, and
+  `docker/gh-wrapper.sh` (installed as `/usr/local/bin/gh`, ahead of the real one) passes the
+  token to `gh` as `GH_TOKEN`. Both get it from `gh-app-token`.
+- `git@github.com:` / `ssh://git@github.com/` URLs are rewritten to HTTPS, so they use the same
+  credentials.
+- `gh-app-login` forces a fresh token and checks it works; normally you don't need it.
+
+The private key is mounted under `/root` (mode 0700), so the `agent` user can't read it — only
+root can. `agent` may run exactly `gh-app-token` through a single sudo rule, so an agent can get
+hour-long tokens but can't copy out the key itself. `docker/entrypoint.sh` writes the App ID and
+key path to the root-only `/etc/gh-app.conf` (sudo resets the environment) and unsets both
+variables before dropping privileges.
 
 `GITHUB_APP_ID` defaults to the App already set up for this key; override it in a `.env` file if
 you swap in a different App/key.
@@ -82,8 +95,16 @@ image:
 ## Container internals
 
 Container starts as root (`docker/entrypoint.sh`): sets the iptables rule, `chown`s the mounted
-dirs to the unprivileged `agent` user, then drops to it (`setpriv`) and runs
-`docker/agent-start.sh`, which lazily installs `elan` into `~/.elan` on a first/empty cache,
-installs `pi-mcp-adapter`, runs `gh-app-login`, exports `CLAUDE_CODE_OAUTH_TOKEN` if
-`docker/secrets/claude-oauth-token` is mounted, then execs whatever command was requested
-(`bash` by default).
+dirs to the unprivileged `agent` user, writes `/etc/gh-app.conf`, then drops to it (`setpriv`)
+and runs `docker/agent-start.sh`. That lazily installs `elan` into `~/.elan` on a first/empty
+cache, mints a first GitHub token (warning if that fails), symlinks `~/.claude/CLAUDE.md` to
+`~/.pi/agent/AGENTS.md`, exports `CLAUDE_CODE_OAUTH_TOKEN` if `docker/secrets/claude-oauth-token`
+is mounted, then execs whatever command was requested (`bash` by default).
+
+## Agent instructions
+
+`pi/agent/AGENTS.md` holds container-wide instructions for both agents: where they are, how
+GitHub auth works, which tools exist, and working habits. pi loads it as its global
+`~/.pi/agent/AGENTS.md`; `agent-start.sh` symlinks it to `~/.claude/CLAUDE.md` for Claude Code
+(unless a real file already exists there). Project-specific rules belong in each repo's own
+`AGENTS.md` / `CLAUDE.md`. Update the tool list there when you change the image.
