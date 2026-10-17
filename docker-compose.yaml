@@ -21,6 +21,7 @@ services:
       - ./.docker-cache/claude:/home/agent/.claude
       - ./.docker-cache/claude.json:/home/agent/.claude.json
       - ./pi:/home/agent/.pi
+      - ./claude:/home/agent/claude-instructions
       - ./bin:/home/agent/bin
       # Read-only. Not committed — see .gitignore (/docker/secrets/). The App key goes under /root
       # (0700) so only root — i.e. gh-app-token via sudo — can read it, never the agent.

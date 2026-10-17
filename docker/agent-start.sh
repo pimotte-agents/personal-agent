@@ -14,10 +14,10 @@ if ! sudo -n /usr/local/bin/gh-app-token >/dev/null; then
   echo "agent-start: couldn't mint a GitHub App token, continuing without GitHub auth" >&2
 fi
 
-# One set of container-wide agent instructions: pi reads ~/.pi/agent/AGENTS.md (tracked in this
-# repo as pi/agent/AGENTS.md); Claude Code reads ~/.claude/CLAUDE.md. Leave a real file alone.
-if [ -f "$HOME/.pi/agent/AGENTS.md" ] && { [ -L "$HOME/.claude/CLAUDE.md" ] || [ ! -e "$HOME/.claude/CLAUDE.md" ]; }; then
-  ln -sfn "$HOME/.pi/agent/AGENTS.md" "$HOME/.claude/CLAUDE.md"
+# Claude Code reads ~/.claude/CLAUDE.md; ours is tracked in this repo as claude/CLAUDE.md (pi has
+# its own, pi/agent/AGENTS.md). Leave a real file alone.
+if [ -f "$HOME/claude-instructions/CLAUDE.md" ] && { [ -L "$HOME/.claude/CLAUDE.md" ] || [ ! -e "$HOME/.claude/CLAUDE.md" ]; }; then
+  ln -sfn "$HOME/claude-instructions/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
 fi
 
 # Long-lived `claude setup-token` token, so `claude` authenticates against the subscription

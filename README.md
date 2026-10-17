@@ -31,7 +31,8 @@ Nothing else on your machine is mounted in.
 |---|---|---|---|
 | `./projects` | `/workspace` | no | repos the agent works on |
 | `./bin` | `~/bin` | yes | your own scripts, on `PATH` ahead of everything else |
-| `./pi` | `~/.pi` | yes | pi config, incl. `pi/agent/models.json` (local llama.cpp provider) and `pi/agent/AGENTS.md` (container-wide agent instructions) |
+| `./pi` | `~/.pi` | yes | pi config, incl. `pi/agent/models.json` (local llama.cpp provider) and `pi/agent/AGENTS.md` (container-wide pi instructions) |
+| `./claude` | `~/claude-instructions` | yes | `claude/CLAUDE.md`, container-wide Claude Code instructions (symlinked to `~/.claude/CLAUDE.md`) |
 | `./docker/secrets/github-app.pem` | `/root/secrets/github-app.pem` (ro, root-only) | **no** | GitHub App private key |
 | `./docker/secrets/claude-oauth-token` | `/secrets/claude-oauth-token` (ro) | **no** | long-lived Claude Code subscription token |
 | `./.docker-cache/{npm,elan,claude}` | `~/.npm`, `~/.elan`, `~/.claude` | no | tool caches/config, survive rebuilds |
@@ -98,13 +99,18 @@ Container starts as root (`docker/entrypoint.sh`): sets the iptables rule, `chow
 dirs to the unprivileged `agent` user, writes `/etc/gh-app.conf`, then drops to it (`setpriv`)
 and runs `docker/agent-start.sh`. That lazily installs `elan` into `~/.elan` on a first/empty
 cache, mints a first GitHub token (warning if that fails), symlinks `~/.claude/CLAUDE.md` to
-`~/.pi/agent/AGENTS.md`, exports `CLAUDE_CODE_OAUTH_TOKEN` if `docker/secrets/claude-oauth-token`
+`~/claude-instructions/CLAUDE.md`, exports `CLAUDE_CODE_OAUTH_TOKEN` if `docker/secrets/claude-oauth-token`
 is mounted, then execs whatever command was requested (`bash` by default).
 
 ## Agent instructions
 
-`pi/agent/AGENTS.md` holds container-wide instructions for both agents: where they are, how
-GitHub auth works, which tools exist, and working habits. pi loads it as its global
-`~/.pi/agent/AGENTS.md`; `agent-start.sh` symlinks it to `~/.claude/CLAUDE.md` for Claude Code
-(unless a real file already exists there). Project-specific rules belong in each repo's own
-`AGENTS.md` / `CLAUDE.md`. Update the tool list there when you change the image.
+Each agent has its own container-wide instructions, with overlapping basics (where they are, how
+GitHub auth works, which tools exist, working habits):
+
+- `pi/agent/AGENTS.md`: loaded by pi as its global `~/.pi/agent/AGENTS.md`.
+- `claude/CLAUDE.md`: `agent-start.sh` symlinks it to `~/.claude/CLAUDE.md` for Claude Code
+  (unless a real file already exists there). It also covers resource costs and tells Claude to
+  delegate simple tasks to `pi` (one instance at a time) when the llama-server health check passes.
+
+Project-specific rules belong in each repo's own `AGENTS.md` / `CLAUDE.md`. Update the tool list
+in both files when you change the image.
