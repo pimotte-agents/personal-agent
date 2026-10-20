@@ -3,7 +3,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg git build-essential iptables jq vim \
       graphviz sqlite3 chromium \
-      procps file ripgrep python3-pip python3-venv poppler-utils openssh-client sudo \
+      procps file ripgrep python3-pip python3-venv poppler-utils openssh-client sudo tzdata \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
          -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
     && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -13,17 +13,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends gh nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g @anthropic-ai/claude-code
-RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+# Local time in the container (logs, commit timestamps, `date`) is Amsterdam time.
+ENV TZ=Europe/Amsterdam
+RUN ln -snf "/usr/share/zoneinfo/$TZ" /etc/localtime && echo "$TZ" > /etc/timezone
 
+# claude and pi are installed by agent-start.sh into an npm prefix the agent user owns
+# ($NPM_CONFIG_PREFIX, bind-mounted from .docker-cache), so they can auto-update themselves and
+# the updates survive `--rm`. That prefix is last on PATH, behind the wrapper below.
+#
 # Container is an isolated sandbox (unprivileged user, network scoped by the entrypoint's
-# iptables rule), so always run claude with permission prompts bypassed. Wrap the real binary
-# rather than aliasing "claude", so this applies no matter how it's invoked (interactively or
-# via bin/claude-local, which execs "claude").
-RUN real_claude="$(command -v claude)" \
- && mv "$real_claude" "${real_claude}.real" \
- && printf '#!/usr/bin/env bash\nexec "%s.real" --dangerously-skip-permissions "$@"\n' "$real_claude" > "$real_claude" \
- && chmod +x "$real_claude"
+# iptables rule), so always run claude with permission prompts bypassed. The wrapper lives in
+# /usr/local/bin, outside the npm prefix, so updates can't overwrite it, and it applies no matter
+# how claude is invoked (interactively or via bin/claude-local, which execs "claude").
+RUN printf '#!/usr/bin/env bash\nexec "$NPM_CONFIG_PREFIX/bin/claude" --dangerously-skip-permissions "$@"\n' \
+      > /usr/local/bin/claude \
+ && chmod 755 /usr/local/bin/claude
 
 # Agent code runs as this user, not root. The entrypoint starts as root (needed for the iptables
 # rule below), then drops to this user before running anything from /workspace.
@@ -50,8 +54,9 @@ RUN chmod 700 /root \
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 ENV HOME=/home/agent \
-    ELAN_HOME=/home/agent/.elan
-ENV PATH="${HOME}/bin:${ELAN_HOME}/bin:${PATH}"
+    ELAN_HOME=/home/agent/.elan \
+    NPM_CONFIG_PREFIX=/home/agent/.npm-global
+ENV PATH="${HOME}/bin:${ELAN_HOME}/bin:${PATH}:${NPM_CONFIG_PREFIX}/bin"
 
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY docker/agent-start.sh /usr/local/bin/agent-start.sh

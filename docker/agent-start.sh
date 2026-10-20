@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
-# Runs as the unprivileged `agent` user. ~/.elan and ~/.pi are bind-mounted from the host cache
-# dirs, so on a fresh (empty) cache they need to be populated before first use.
+# Runs as the unprivileged `agent` user. ~/.elan, ~/.npm-global and ~/.pi are bind-mounted from
+# the host cache dirs, so on a fresh (empty) cache they need to be populated before first use.
 set -euo pipefail
 
 if [ ! -x "$ELAN_HOME/bin/elan" ]; then
   curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf \
     | sh -s -- -y --no-modify-path --default-toolchain none
+fi
+
+# claude and pi live in the agent-owned $NPM_CONFIG_PREFIX so they can update themselves; install
+# them only when missing, after that they keep themselves current.
+if [ ! -x "$NPM_CONFIG_PREFIX/bin/claude" ]; then
+  npm install -g @anthropic-ai/claude-code
+fi
+if [ ! -x "$NPM_CONFIG_PREFIX/bin/pi" ]; then
+  npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 fi
 
 # Warm the GitHub token cache and surface a broken setup early. Best-effort: no network / no key

@@ -17,6 +17,7 @@ services:
     volumes:
       - ./projects:/workspace
       - ./.docker-cache/npm:/home/agent/.npm
+      - ./.docker-cache/npm-global:/home/agent/.npm-global
       - ./.docker-cache/elan:/home/agent/.elan
       - ./.docker-cache/claude:/home/agent/.claude
       - ./.docker-cache/claude.json:/home/agent/.claude.json

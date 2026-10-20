@@ -35,7 +35,7 @@ Nothing else on your machine is mounted in.
 | `./claude` | `~/claude-instructions` | yes | `claude/CLAUDE.md`, container-wide Claude Code instructions (symlinked to `~/.claude/CLAUDE.md`) |
 | `./docker/secrets/github-app.pem` | `/root/secrets/github-app.pem` (ro, root-only) | **no** | GitHub App private key |
 | `./docker/secrets/claude-oauth-token` | `/secrets/claude-oauth-token` (ro) | **no** | long-lived Claude Code subscription token |
-| `./.docker-cache/{npm,elan,claude}` | `~/.npm`, `~/.elan`, `~/.claude` | no | tool caches/config, survive rebuilds |
+| `./.docker-cache/{npm,npm-global,elan,claude}` | `~/.npm`, `~/.npm-global`, `~/.elan`, `~/.claude` | no | tool caches/config, survive rebuilds; `~/.npm-global` holds the self-updating `claude` and `pi` |
 
 `./bin` and `./pi` are meant to be committed (put scripts/config you want to keep in them).
 Everything else under `.docker-cache/`, `projects/`, and `docker/secrets/` is host-local

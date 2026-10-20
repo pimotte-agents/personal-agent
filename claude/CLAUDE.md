@@ -49,6 +49,9 @@ and review what it returns.
   a running pi to finish before starting another and never launch several in parallel. Pass
   long-running ones through a log file in the background as described under Working habits, and
   check that no `pi` process is still running (`pgrep -x pi`) before starting a new one.
+- Prefer pi over Claude subagents (the Agent tool) for delegated work. For per-file tasks, run pi
+  on one file at a time from a background script with a log and report file per item, then review
+  the diffs yourself.
 
 ## GitHub
 
